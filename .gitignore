@@ -1,0 +1,18 @@
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# Training datasets
+data/
+*.csv
+*.parquet
+
+# Secrets
+.env
+credentials.json
+token.json
+client_secret*.json
+
+# System files
+.DS_Store
