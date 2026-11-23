@@ -1,29 +1,29 @@
 import re
 
+
+# A single pass gives an email priority over a phone-like number in its address.
+PRIVATE_INFO = re.compile(
+    r"(?P<emails>(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b)"
+    r"|(?P<phone_numbers>(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d))"
+    r"|(?P<aadhaar_numbers>(?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d))"
+)
+REPLACEMENTS = {
+    "emails": "[EMAIL]",
+    "phone_numbers": "[PHONE]",
+    "aadhaar_numbers": "[AADHAAR]",}
+
+
 def detect_private_info(text):
-    emails = []
-    phones = []
-    aadhaar = []
-    email_pattern = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
-    phone_pattern = r"(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)"
-    aadhaar_pattern = r"(?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d)"
-    emails = re.findall(email_pattern, text)
-    phones = re.findall(phone_pattern, text)
-    aadhaar = re.findall(aadhaar_pattern, text)
-    return {
-        "emails": emails,
-        "phone_numbers": phones,
-        "aadhaar_numbers": aadhaar}
+    matches = {category: [] for category in REPLACEMENTS}
+    for match in PRIVATE_INFO.finditer(text):
+        matches[match.lastgroup].append(match.group())
+    return matches
+
 
 def redact_private_info(text):
-    results = detect_private_info(text)
-    for email in results["emails"]:
-        text = text.replace(email, "[EMAIL]")
-    for phone in results["phone_numbers"]:
-        text = text.replace(phone, "[PHONE]")
-    for aadhaar in results["aadhaar_numbers"]:
-        text = text.replace(aadhaar, "[AADHAAR]")
-    return text
+    # Replace each matched span so a short address cannot alter a longer one.
+    return PRIVATE_INFO.sub(lambda match: REPLACEMENTS[match.lastgroup], text)
+
 
 if __name__ == "__main__":
     sample = """

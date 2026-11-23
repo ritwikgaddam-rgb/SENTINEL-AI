@@ -1,0 +1,40 @@
+:root {
+  background: #03094b;
+  color: white;
+  font: 14px/1.45 system-ui, sans-serif;
+}
+
+:root[data-theme="orange"] {
+  background: #541504;
+}
+
+body {
+  margin: 0;
+  width: 260px;
+}
+
+main {
+  padding: 16px;
+}
+
+h1 {
+  margin: 0 0 14px;
+}
+
+h1 img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+label {
+  margin-right: 0.5rem;
+}
+
+select {
+  font: inherit;
+}
+
+#status:empty {
+  display: none;
+}

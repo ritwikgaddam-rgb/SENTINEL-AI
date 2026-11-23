@@ -16,3 +16,14 @@ client_secret*.json
 
 # System files
 .DS_Store
+# Local app runtime and scan history
+.runtime/
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+*.sqlite3-*
+# Frontend dependencies and production builds
+node_modules/
+dist/
+*.tsbuildinfo

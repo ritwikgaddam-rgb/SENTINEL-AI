@@ -1,0 +1,22 @@
+{
+  "identifier": "main",
+  "description": "SentinelAI's local scanner and macOS Messages commands.",
+  "windows": ["main"],
+  "platforms": ["macOS"],
+  "permissions": [
+    "allow-backend-health",
+    "allow-backend-history",
+    "allow-scan-url",
+    "allow-scan-email",
+    "allow-check-messages-access",
+    "allow-open-privacy-settings",
+    "allow-start-monitoring",
+    "allow-pause-monitoring",
+    "allow-resume-monitoring",
+    "allow-stop-monitoring",
+    "allow-monitoring-status",
+    "allow-message-scan-history",
+    "allow-message-history-summary",
+    "allow-clear-message-scan-history"
+  ]
+}

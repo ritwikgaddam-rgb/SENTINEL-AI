@@ -1,0 +1,21 @@
+[package]
+name = "sentinelai-desktop"
+version = "0.2.0"
+description = "SentinelAI for macOS"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

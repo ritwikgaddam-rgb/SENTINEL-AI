@@ -3,7 +3,7 @@ from urllib.parse import urlsplit
 import ipaddress
 import pandas as pd
 
-def extract_url_features(url):
+def url_feature_values(url):
     ##removes leading and trailing spaces from the URL
     url = url.strip()
     ##if url doesnt start with http or https then it raises an error
@@ -46,8 +46,7 @@ def extract_url_features(url):
     https = 0
     if parsed.scheme == "https":
         https = 1
-    #stores extracted values and stores in dictionary and converts to df and returns
-    data = {
+    return {
         "URLLength": len(url),
         "DomainLength": len(domain),
         "IsDomainIP": ip,
@@ -58,7 +57,10 @@ def extract_url_features(url):
         "NoOfAmpersandInURL": url.count("&"),
         "IsHTTPS": https
     }
-    return pd.DataFrame([data])
+
+
+def extract_url_features(url):
+    return pd.DataFrame([url_feature_values(url)])
 
 if __name__ == "__main__":
     url = "https://mail.google.com/login?user=123"
