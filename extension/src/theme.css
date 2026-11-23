@@ -1,0 +1,216 @@
+/* =============================================================================
+   SENTINEL AI - DESIGN SYSTEM & THEME CONFIGURATION
+   =============================================================================
+   You can easily customize all colors, glassmorphism intensities, borders, and
+   radii by editing the variables in this file.
+
+   Base Cold Tone:   #03094b (Deep Midnight Sapphire)
+   Base Warm Tone:   #541504 (Deep Terracotta Ember)
+   Typography:       Inter with tight letter spacing for native macOS aesthetic
+   ============================================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  /* Common Geometry & Typography */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+  --letter-spacing-tight: -0.022em;
+  --letter-spacing-normal: -0.012em;
+  --letter-spacing-wide: 0.04em;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  --transition-smooth: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-spring: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Status Colors */
+  --color-safe: #10b981;
+  --color-safe-bg: rgba(16, 185, 129, 0.12);
+  --color-safe-glow: rgba(16, 185, 129, 0.3);
+
+  --color-suspicious: #f59e0b;
+  --color-suspicious-bg: rgba(245, 158, 11, 0.14);
+  --color-suspicious-glow: rgba(245, 158, 11, 0.3);
+
+  --color-danger: #ef4444;
+  --color-danger-bg: rgba(239, 68, 68, 0.14);
+  --color-danger-glow: rgba(239, 68, 68, 0.35);
+
+  --color-info: #0284c7;
+  --color-info-bg: rgba(2, 132, 199, 0.12);
+}
+
+/* -----------------------------------------------------------------------------
+   THEME 1: COLD INDIGO / SAPPHIRE (Default) - DARK MODE
+   Core Base: #03094b
+   ----------------------------------------------------------------------------- */
+[data-theme="cold"][data-mode="dark"],
+[data-theme="cold"]:not([data-mode="light"]),
+:root:not([data-theme="warm"]):not([data-mode="light"]) {
+  --base-primary: #03094b;
+  --bg-app: #040822;
+  --bg-gradient: radial-gradient(circle at 50% 0%, #0d1754 0%, #040822 80%);
+
+  --surface-card: rgba(11, 19, 66, 0.65);
+  --surface-card-hover: rgba(16, 28, 92, 0.85);
+  --surface-card-active: rgba(22, 38, 120, 0.95);
+  --surface-glass: rgba(6, 11, 40, 0.75);
+  --surface-input: rgba(4, 8, 30, 0.7);
+
+  --border-subtle: rgba(72, 104, 255, 0.14);
+  --border-card: rgba(84, 118, 255, 0.22);
+  --border-highlight: rgba(120, 152, 255, 0.38);
+
+  --accent-color: #4a6bff;
+  --accent-secondary: #748dff;
+  --accent-glow: rgba(74, 107, 255, 0.35);
+  --accent-glow-soft: rgba(74, 107, 255, 0.15);
+
+  --text-main: #f5f7ff;
+  --text-secondary: #a3b1e2;
+  --text-tertiary: #6b7ba9;
+  --text-inverted: #03094b;
+
+  --shadow-popup: 0 20px 40px rgba(0, 0, 0, 0.55), 0 0 1px 1px rgba(255, 255, 255, 0.08);
+  --shadow-card: 0 4px 16px rgba(0, 3, 20, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* -----------------------------------------------------------------------------
+   THEME 1: COLD INDIGO / SAPPHIRE - LIGHT MODE
+   Core Base: #03094b
+   ----------------------------------------------------------------------------- */
+[data-theme="cold"][data-mode="light"] {
+  --base-primary: #03094b;
+  --bg-app: #f4f6fc;
+  --bg-gradient: radial-gradient(circle at 50% 0%, #e8edfd 0%, #f4f6fc 75%);
+
+  --surface-card: rgba(255, 255, 255, 0.85);
+  --surface-card-hover: rgba(255, 255, 255, 0.98);
+  --surface-card-active: #ffffff;
+  --surface-glass: rgba(255, 255, 255, 0.78);
+  --surface-input: #ffffff;
+
+  --border-subtle: rgba(3, 9, 75, 0.08);
+  --border-card: rgba(3, 9, 75, 0.14);
+  --border-highlight: rgba(3, 9, 75, 0.25);
+
+  --accent-color: #03094b;
+  --accent-secondary: #27398e;
+  --accent-glow: rgba(3, 9, 75, 0.2);
+  --accent-glow-soft: rgba(3, 9, 75, 0.08);
+
+  --text-main: #03094b;
+  --text-secondary: #3b4672;
+  --text-tertiary: #6d78a1;
+  --text-inverted: #ffffff;
+
+  --shadow-popup: 0 14px 34px rgba(3, 9, 75, 0.12), 0 0 0 1px rgba(3, 9, 75, 0.06);
+  --shadow-card: 0 2px 10px rgba(3, 9, 75, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* -----------------------------------------------------------------------------
+   THEME 2: WARM EMBER (Switchable) - DARK MODE
+   Core Base: #541504
+   ----------------------------------------------------------------------------- */
+[data-theme="warm"][data-mode="dark"],
+[data-theme="warm"]:not([data-mode="light"]) {
+  --base-primary: #541504;
+  --bg-app: #150602;
+  --bg-gradient: radial-gradient(circle at 50% 0%, #3a0e03 0%, #150602 85%);
+
+  --surface-card: rgba(48, 14, 5, 0.65);
+  --surface-card-hover: rgba(68, 20, 8, 0.85);
+  --surface-card-active: rgba(86, 25, 10, 0.95);
+  --surface-glass: rgba(24, 7, 3, 0.78);
+  --surface-input: rgba(22, 6, 2, 0.7);
+
+  --border-subtle: rgba(255, 107, 74, 0.16);
+  --border-card: rgba(255, 120, 88, 0.24);
+  --border-highlight: rgba(255, 148, 120, 0.42);
+
+  --accent-color: #ff6838;
+  --accent-secondary: #ff8c64;
+  --accent-glow: rgba(255, 104, 56, 0.35);
+  --accent-glow-soft: rgba(255, 104, 56, 0.15);
+
+  --text-main: #fff5f2;
+  --text-secondary: #e0b4a8;
+  --text-tertiary: #a67c71;
+  --text-inverted: #3a0d02;
+
+  --shadow-popup: 0 20px 40px rgba(0, 0, 0, 0.6), 0 0 1px 1px rgba(255, 255, 255, 0.08);
+  --shadow-card: 0 4px 16px rgba(20, 4, 1, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* -----------------------------------------------------------------------------
+   THEME 2: WARM EMBER - LIGHT MODE
+   Core Base: #541504
+   ----------------------------------------------------------------------------- */
+[data-theme="warm"][data-mode="light"] {
+  --base-primary: #541504;
+  --bg-app: #fdf7f5;
+  --bg-gradient: radial-gradient(circle at 50% 0%, #fae8e2 0%, #fdf7f5 75%);
+
+  --surface-card: rgba(255, 255, 255, 0.88);
+  --surface-card-hover: rgba(255, 255, 255, 0.98);
+  --surface-card-active: #ffffff;
+  --surface-glass: rgba(255, 255, 255, 0.8);
+  --surface-input: #ffffff;
+
+  --border-subtle: rgba(84, 21, 4, 0.09);
+  --border-card: rgba(84, 21, 4, 0.16);
+  --border-highlight: rgba(84, 21, 4, 0.28);
+
+  --accent-color: #541504;
+  --accent-secondary: #8c280d;
+  --accent-glow: rgba(84, 21, 4, 0.2);
+  --accent-glow-soft: rgba(84, 21, 4, 0.08);
+
+  --text-main: #4a1304;
+  --text-secondary: #743424;
+  --text-tertiary: #9e6456;
+  --text-inverted: #ffffff;
+
+  --shadow-popup: 0 14px 34px rgba(84, 21, 4, 0.12), 0 0 0 1px rgba(84, 21, 4, 0.06);
+  --shadow-card: 0 2px 10px rgba(84, 21, 4, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+/* Rotating Sentinel Logo Discord-Style Keyframes */
+@keyframes sentinelSpin {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.08);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}
+
+@keyframes sentinelPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+    filter: drop-shadow(0 0 14px var(--accent-glow));
+  }
+}
+
+.sentinel-spinner {
+  animation: sentinelSpin 1.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+  display: inline-block;
+  transform-origin: center center;
+}
+
+.sentinel-pulse {
+  animation: sentinelPulse 2.6s ease-in-out infinite;
+}

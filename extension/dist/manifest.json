@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "Sentinel AI - Phishing & Privacy Guard",
+  "version": "1.0.0",
+  "description": "Next-generation browser security and privacy guardian against phishing campaigns, social engineering, and identity data leaks.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Sentinel AI Security & Privacy Guard",
+    "default_icon": {
+      "16": "logos/SentinelAILogoIcon(Purple).svg",
+      "32": "logos/SentinelAILogoIcon(Purple).svg",
+      "48": "logos/SentinelAILogoIcon(Purple).svg",
+      "128": "logos/SentinelAILogoIcon(Purple).svg"
+    }
+  },
+  "icons": {
+    "16": "logos/SentinelAILogoIcon(Purple).svg",
+    "32": "logos/SentinelAILogoIcon(Purple).svg",
+    "48": "logos/SentinelAILogoIcon(Purple).svg",
+    "128": "logos/SentinelAILogoIcon(Purple).svg"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://mail.google.com/*",
+        "https://mail.google.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["gmailOverlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+    "*://mail.google.com/*",
+    "<all_urls>"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "logos/*.svg",
+        "gmailOverlay.css"
+      ],
+      "matches": ["*://mail.google.com/*", "<all_urls>"]
+    }
+  ]
+}
