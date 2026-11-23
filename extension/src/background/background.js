@@ -60,11 +60,11 @@ chrome.runtime.onInstalled.addListener(() => {
       if (!result.sentinel_mode) defaults.sentinel_mode = "dark";
       if (typeof result.sentinel_urlShield === "undefined") defaults.sentinel_urlShield = true;
       if (typeof result.sentinel_gmailOverlay === "undefined") defaults.sentinel_gmailOverlay = true;
-      if (!result.sentinel_toolbar_icon) defaults.sentinel_toolbar_icon = "purple_shield";
+      if (!result.sentinel_toolbar_icon) defaults.sentinel_toolbar_icon = "purple_minimal";
 
       chrome.storage.local.set(defaults, () => {
         // Apply the default icon on first install
-        applyIcon(result.sentinel_toolbar_icon || "purple_shield");
+        applyIcon(result.sentinel_toolbar_icon || "purple_minimal");
       });
     }
   );

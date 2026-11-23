@@ -1,12 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import MarkersCard from './MarkersCard';
 import LogoLoader from './LogoLoader';
 import { fetchRecentEmails, scanEmailWithBackend } from '../gmailApi';
 
 // ─── Risk level helper ───────────────────────────────────────────────────────
-function getRiskColor(level) {
+// ─── Risk level helper ───────────────────────────────────────────────────────
+function getRiskColor(level, theme, mode) {
   if (level === 'danger') return 'var(--color-danger)';
-  if (level === 'suspicious') return 'var(--color-warning)';
+  if (level === 'suspicious') {
+    return theme === 'cold' && mode === 'dark' ? '#ffffff' : 'var(--color-warning)';
+  }
   return 'var(--color-safe)';
 }
 
@@ -15,8 +18,8 @@ function heuristicScan(text, sender) {
   const textLower = text.toLowerCase();
   const hasUrgency = /urgent|suspended|password|verify|immediately|within \d+ hours/.test(textLower);
   const aadhaarMatches = text.match(/(?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d)/g) || [];
-  const phoneMatches = text.match(/(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)/g) || [];
-  const emailMatches = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g) || [];
+  const phoneMatches   = text.match(/(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)/g)   || [];
+  const emailMatches   = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g) || [];
 
   const markers = [];
   if (hasUrgency) markers.push({ id: 'urgency', title: 'High-Pressure Psychological Trigger', description: 'Urgent phrasing designed to rush decision-making.', severity: 'high' });
@@ -32,7 +35,8 @@ function heuristicScan(text, sender) {
 }
 
 // ─── Single email result card ────────────────────────────────────────────────
-function InboxEmailRow({ email, onSelect, isSelected }) {
+// ─── Single email result card ────────────────────────────────────────────────
+function InboxEmailRow({ email, onSelect, isSelected, theme, mode }) {
   return (
     <button
       onClick={() => onSelect(email)}
@@ -61,7 +65,7 @@ function InboxEmailRow({ email, onSelect, isSelected }) {
           </span>
         )}
         {email.scanResult && (
-          <span style={{ fontSize: '9px', fontWeight: 700, color: getRiskColor(email.scanResult.risk_level), flexShrink: 0 }}>
+          <span style={{ fontSize: '9px', fontWeight: 700, color: getRiskColor(email.scanResult.risk_level, theme, mode), flexShrink: 0 }}>
             {email.scanResult.risk_level === 'danger' ? 'THREAT' : email.scanResult.risk_level === 'suspicious' ? 'CAUTION' : 'SAFE'}
           </span>
         )}
@@ -79,27 +83,20 @@ function InboxEmailRow({ email, onSelect, isSelected }) {
 // ─── Main component ──────────────────────────────────────────────────────────
 export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, accessToken, onSignIn, authLoading }) {
   // Manual paste scanner state
-  const [emailText, setEmailText] = useState('');
-  const [sender, setSender] = useState('');
+  const [emailText, setEmailText]     = useState('');
+  const [sender, setSender]           = useState('');
   const [manualLoading, setManualLoading] = useState(false);
-  const [manualResult, setManualResult] = useState(null);
-  const [copied, setCopied] = useState(false);
+  const [manualResult, setManualResult]   = useState(null);
+  const [copied, setCopied]           = useState(false);
 
   // Gmail inbox scanner state
-  const [inboxEmails, setInboxEmails] = useState([]);
-  const [inboxLoading, setInboxLoading] = useState(false);
-  const [inboxError, setInboxError] = useState(null);
-  const [selectedEmail, setSelectedEmail] = useState(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailResult, setDetailResult] = useState(null);
-  const [scannedCount, setScannedCount] = useState(0);
-
-  const autoScannedTokenRef = useRef(null);
-  const scanRunIdRef = useRef(0);
-
-  useEffect(() => {
-    return () => { scanRunIdRef.current += 1; };
-  }, []);
+  const [inboxEmails, setInboxEmails]       = useState([]);
+  const [inboxLoading, setInboxLoading]     = useState(false);
+  const [inboxError, setInboxError]         = useState(null);
+  const [selectedEmail, setSelectedEmail]   = useState(null);
+  const [detailLoading, setDetailLoading]   = useState(false);
+  const [detailResult, setDetailResult]     = useState(null);
+  const [scannedCount, setScannedCount]     = useState(0);
 
   // ── Manual scanner ─────────────────────────────────────────────────────
   const handleManualScan = async () => {
@@ -120,8 +117,8 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
     let cleaned = emailText;
     if (manualResult?.privacy) {
       for (const a of manualResult.privacy.aadhaar_numbers || []) cleaned = cleaned.replace(a, '[AADHAAR]');
-      for (const p of manualResult.privacy.phone_numbers || []) cleaned = cleaned.replace(p, '[PHONE]');
-      for (const e of manualResult.privacy.emails || []) cleaned = cleaned.replace(e, '[EMAIL]');
+      for (const p of manualResult.privacy.phone_numbers  || []) cleaned = cleaned.replace(p, '[PHONE]');
+      for (const e of manualResult.privacy.emails         || []) cleaned = cleaned.replace(e, '[EMAIL]');
     }
     await navigator.clipboard.writeText(cleaned);
     setCopied(true);
@@ -131,8 +128,6 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
   // ── Gmail inbox fetch & scan ───────────────────────────────────────────
   const handleFetchInbox = async () => {
     if (!accessToken) return;
-    const runId = ++scanRunIdRef.current;
-
     setInboxLoading(true);
     setInboxError(null);
     setInboxEmails([]);
@@ -142,52 +137,32 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
 
     try {
       const emails = await fetchRecentEmails(accessToken, 20);
-      if (scanRunIdRef.current !== runId) return;
       setInboxEmails(emails);
 
+      // Auto-scan each email and annotate with risk
       let count = 0;
       const annotated = [...emails];
       for (let i = 0; i < annotated.length; i++) {
-        if (scanRunIdRef.current !== runId) return;
         try {
           const scan = await scanEmailWithBackend(backendUrl, annotated[i]);
           annotated[i] = { ...annotated[i], scanResult: scan };
         } catch {
           annotated[i] = { ...annotated[i], scanResult: heuristicScan(annotated[i].body || annotated[i].snippet, annotated[i].sender) };
         }
-        if (scanRunIdRef.current !== runId) return;
         count++;
         setScannedCount(count);
         setInboxEmails([...annotated]);
       }
     } catch (err) {
-      if (scanRunIdRef.current !== runId) return;
       if (err.message === 'TOKEN_EXPIRED') {
-        setInboxError('Session expired. Please reconnect your Google account.');
+        setInboxError('Session expired. Please sign in again from Settings.');
       } else {
         setInboxError(err.message || 'Failed to fetch inbox.');
       }
     } finally {
-      if (scanRunIdRef.current === runId) {
-        setInboxLoading(false);
-      }
+      setInboxLoading(false);
     }
   };
-
-  // Auto-scan inbox immediately after sign-in or when opening tab while signed in
-  useEffect(() => {
-    if (googleUser && accessToken && autoScannedTokenRef.current !== accessToken) {
-      autoScannedTokenRef.current = accessToken;
-      handleFetchInbox();
-    }
-    if (!googleUser || !accessToken) {
-      autoScannedTokenRef.current = null;
-      setInboxEmails([]);
-      setSelectedEmail(null);
-      setDetailResult(null);
-      setInboxError(null);
-    }
-  }, [googleUser, accessToken]);
 
   const handleSelectEmail = async (email) => {
     setSelectedEmail(email);
@@ -236,12 +211,23 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
             <span style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>
               {scannedCount}/{inboxEmails.length} scanned
               {threats.length > 0 && <span style={{ color: 'var(--color-danger)', fontWeight: 700, marginLeft: '6px' }}> {threats.length} threat{threats.length > 1 ? 's' : ''}</span>}
-              {cautions.length > 0 && <span style={{ color: 'var(--color-warning)', fontWeight: 700, marginLeft: '4px' }}> {cautions.length} caution</span>}
+              {cautions.length > 0 && (
+                <span
+                  style={{
+                    color: theme === 'cold' && mode === 'dark' ? '#ffffff' : 'var(--color-warning)',
+                    fontWeight: 700,
+                    marginLeft: '4px',
+                  }}
+                >
+                  {' '}{cautions.length} caution
+                </span>
+              )}
             </span>
           )}
         </div>
 
         {!googleUser ? (
+          /* Not signed in */
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', padding: '16px 0' }}>
             <div style={{ textAlign: 'center' }}>
               <img src={logoSrc} alt="Sentinel AI" style={{ height: '36px', width: 'auto', display: 'block', margin: '0 auto 8px' }} />
@@ -265,10 +251,10 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
               ) : (
                 <>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
-                    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-                    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05" />
-                    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+                    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
                   </svg>
                   Sign in with Google
                 </>
@@ -276,6 +262,7 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
             </button>
           </div>
         ) : (
+          /* Signed in */
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
@@ -297,7 +284,7 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
                 ) : (
                   <>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="11" height="11">
-                      <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                      <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
                     </svg>
                     {inboxEmails.length > 0 ? 'Re-scan Inbox' : 'Scan Inbox'}
                   </>
@@ -306,16 +293,8 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
             </div>
 
             {inboxError && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', fontSize: '11.5px', color: 'var(--color-danger)', background: 'var(--color-danger-bg)', borderRadius: '7px', padding: '8px 10px', border: '1px solid rgba(239,68,68,0.3)' }}>
-                <span>{inboxError}</span>
-                <button
-                  className="btn-secondary"
-                  style={{ height: '24px', fontSize: '10.5px', padding: '0 8px', flexShrink: 0 }}
-                  onClick={onSignIn}
-                  disabled={authLoading}
-                >
-                  Reconnect
-                </button>
+              <div style={{ fontSize: '11.5px', color: 'var(--color-danger)', background: 'var(--color-danger-bg)', borderRadius: '7px', padding: '8px 10px', border: '1px solid rgba(239,68,68,0.3)' }}>
+                {inboxError}
               </div>
             )}
 
@@ -323,24 +302,28 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
               <LogoLoader theme={theme} mode={mode} text="Fetching & scanning inbox..." />
             )}
 
-            {inboxEmails.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxHeight: '220px', overflowY: 'auto' }}>
-                {inboxEmails.map(email => (
-                  <InboxEmailRow
-                    key={email.id}
-                    email={email}
-                    isSelected={selectedEmail?.id === email.id}
-                    onSelect={handleSelectEmail}
-                  />
-                ))}
-              </div>
-            )}
+            {/* Email list */}
+              {inboxEmails.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxHeight: '220px', overflowY: 'auto' }}>
+                  {inboxEmails.map(email => (
+                    <InboxEmailRow
+                      key={email.id}
+                      email={email}
+                      isSelected={selectedEmail?.id === email.id}
+                      onSelect={handleSelectEmail}
+                      theme={theme}
+                      mode={mode}
+                    />
+                  ))}
+                </div>
+              )}
 
+            {/* Selected email detail */}
             {selectedEmail && (
               <div style={{ marginTop: '2px' }}>
                 <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="12" height="12">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                   </svg>
                   Threat Analysis
                 </div>

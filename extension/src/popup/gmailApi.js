@@ -9,10 +9,6 @@ const PEOPLE_BASE = 'https://people.googleapis.com/v1/people/me';
 
 // ─── Token Management ───────────────────────────────────────────────────────
 
-/**
- * Get a valid OAuth access token interactively.
- * Returns the token string or throws on failure.
- */
 export async function getToken(interactive = true) {
   return new Promise((resolve, reject) => {
     if (typeof chrome === 'undefined' || !chrome.identity) {
@@ -29,14 +25,10 @@ export async function getToken(interactive = true) {
   });
 }
 
-/**
- * Revoke and clear a cached token so the user is effectively signed out.
- */
 export async function revokeToken(token) {
   return new Promise((resolve) => {
     if (!token) { resolve(); return; }
     chrome.identity.removeCachedAuthToken({ token }, async () => {
-      // Also hit the Google revoke endpoint so the grant is fully removed
       try {
         await fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`);
       } catch { /* silent – best-effort */ }
@@ -45,10 +37,6 @@ export async function revokeToken(token) {
   });
 }
 
-/**
- * Fetch a fresh non-interactive token to check if the user is still signed in.
- * Returns null instead of throwing.
- */
 export async function getTokenSilent() {
   try {
     return await getToken(false);
@@ -59,11 +47,7 @@ export async function getTokenSilent() {
 
 // ─── User Profile ────────────────────────────────────────────────────────────
 
-/**
- * Fetch the signed-in user's Google profile (name, email, photo).
- */
 export async function fetchUserProfile(token) {
-  // Try People API first for richer data
   try {
     const res = await fetch(
       `${PEOPLE_BASE}?personFields=names,emailAddresses,photos`,
@@ -78,7 +62,6 @@ export async function fetchUserProfile(token) {
     }
   } catch { /* fall through */ }
 
-  // Fallback: Gmail profile endpoint (always available with gmail.readonly)
   const res = await fetch(`${GMAIL_BASE}/profile`, {
     headers: { Authorization: `Bearer ${token}` }
   });
@@ -89,28 +72,18 @@ export async function fetchUserProfile(token) {
 
 // ─── Gmail Message Fetching ──────────────────────────────────────────────────
 
-/**
- * Decode a base64url-encoded Gmail message part body.
- */
 function decodeBody(encoded) {
   if (!encoded) return '';
   try {
-    // base64url → base64
     const b64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
-    return decodeURIComponent(
-      atob(b64)
-        .split('')
-        .map(c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))
-        .join('')
-    );
+    const binary = atob(b64);
+    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+    return new TextDecoder('utf-8').decode(bytes);
   } catch {
     return '';
   }
 }
 
-/**
- * Recursively extract the plain-text body from a MIME part tree.
- */
 function extractPlainText(part) {
   if (!part) return '';
   if (part.mimeType === 'text/plain' && part.body?.data) {
@@ -125,16 +98,31 @@ function extractPlainText(part) {
   return '';
 }
 
-/**
- * Extract a named header value from a message payload.
- */
+function extractHtmlText(part) {
+  if (!part) return '';
+  if (part.mimeType === 'text/html' && part.body?.data) {
+    const html = decodeBody(part.body.data);
+    return html
+      .replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi, '$2 ($1)')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  if (part.parts) {
+    for (const child of part.parts) {
+      const text = extractHtmlText(child);
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
 function getHeader(headers = [], name) {
   return headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
 }
 
-/**
- * Fetch a single message's full details.
- */
 async function fetchMessageDetail(token, messageId) {
   const res = await fetch(`${GMAIL_BASE}/messages/${messageId}?format=full`, {
     headers: { Authorization: `Bearer ${token}` }
@@ -143,16 +131,7 @@ async function fetchMessageDetail(token, messageId) {
   return res.json();
 }
 
-/**
- * Fetch the N most recent inbox messages and return structured objects.
- *
- * @param {string} token  - OAuth access token
- * @param {number} maxResults - how many messages to fetch (default 20)
- * @param {string} query  - Gmail search query (default: unread inbox)
- * @returns {Promise<Array>} - array of { id, threadId, subject, sender, snippet, body, date, labelIds }
- */
 export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbox') {
-  // 1. Get message list
   const listUrl = `${GMAIL_BASE}/messages?maxResults=${maxResults}&q=${encodeURIComponent(query)}`;
   const listRes = await fetch(listUrl, {
     headers: { Authorization: `Bearer ${token}` }
@@ -165,7 +144,6 @@ export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbo
   const messages = listData.messages ?? [];
   if (messages.length === 0) return [];
 
-  // 2. Fetch each message in parallel (cap at 10 to avoid rate limits)
   const toFetch = messages.slice(0, Math.min(maxResults, 20));
   const details = await Promise.allSettled(
     toFetch.map(m => fetchMessageDetail(token, m.id))
@@ -176,7 +154,7 @@ export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbo
     .map(r => {
       const msg = r.value;
       const headers = msg.payload?.headers ?? [];
-      const body = extractPlainText(msg.payload) || msg.snippet || '';
+      const body = extractPlainText(msg.payload) || extractHtmlText(msg.payload) || msg.snippet || '';
       return {
         id: msg.id,
         threadId: msg.threadId,
@@ -191,9 +169,6 @@ export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbo
     });
 }
 
-/**
- * Convenience: scan a fetched email object against the backend.
- */
 export async function scanEmailWithBackend(backendUrl, emailObj) {
   const res = await fetch(`${backendUrl}/api/scan-email`, {
     method: 'POST',
