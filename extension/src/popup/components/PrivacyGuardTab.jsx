@@ -115,15 +115,29 @@ export default function PrivacyGuardTab({ theme, mode, backendUrl }) {
               style={{ width: '100%', marginTop: '10px' }}
               onClick={handleCopyRedacted}
             >
-              {copied ? "✓ Copied Redacted Text to Clipboard" : "Copy Safe Redacted Version"}
+              {copied ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" width="13" height="13">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  Copied Redacted Text to Clipboard
+                </span>
+              ) : "Copy Safe Redacted Version"}
             </button>
           </div>
         )}
       </div>
 
       <div className="card-section" style={{ background: 'var(--surface-input)' }}>
-        <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-          💡 <strong>Privacy Guard Note:</strong> Sentinel AI inspects inputs locally before transmission, shielding citizens from identity theft and unredacted PII exposure across form submissions and email drafts.
+        <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.4, display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14" style={{ flexShrink: 0, marginTop: '2px', color: 'var(--accent-primary)' }}>
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+          <span>
+            <strong>Privacy Guard Note:</strong> Sentinel AI inspects inputs locally before transmission, shielding citizens from identity theft and unredacted PII exposure across form submissions and email drafts.
+          </span>
         </p>
       </div>
     </div>

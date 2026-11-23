@@ -5,6 +5,7 @@ import EmailScannerTab from './components/EmailScannerTab';
 import PrivacyGuardTab from './components/PrivacyGuardTab';
 import SettingsModal from './components/SettingsModal';
 import HistoryModal from './components/HistoryModal';
+import { getToken, getTokenSilent, revokeToken, fetchUserProfile } from './gmailApi';
 import '../theme.css';
 import './Popup.css';
 
@@ -29,14 +30,8 @@ const TABS = [
 ];
 
 export default function App() {
-  const [theme, setTheme] = useState(() => {
-    return localStorage.getItem('sentinel_theme') || 'cold';
-  });
-
-  const [mode, setMode] = useState(() => {
-    return localStorage.getItem('sentinel_mode') || 'dark';
-  });
-
+  const [theme, setTheme] = useState(() => localStorage.getItem('sentinel_theme') || 'cold');
+  const [mode, setMode] = useState(() => localStorage.getItem('sentinel_mode') || 'dark');
   const [activeTab, setActiveTab] = useState('overview');
   const [currentUrl, setCurrentUrl] = useState('');
   const [scanResult, setScanResult] = useState(null);
@@ -46,99 +41,86 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
-  // Auth0 User State
-  const [auth0User, setAuth0User] = useState(() => {
-    const saved = localStorage.getItem('sentinel_auth0_user');
-    return saved ? JSON.parse(saved) : null;
+  // ── Google OAuth user (replaces Auth0) ──────────────────────────────────
+  const [googleUser, setGoogleUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('sentinel_google_user');
+      if (saved) return JSON.parse(saved);
+    } catch { /* ignore */ }
+    return null;
   });
+  const [authLoading, setAuthLoading] = useState(false);
+  // Keep the live access token in memory only (never persisted)
+  const [accessToken, setAccessToken] = useState(null);
 
-  const [settings, setSettings] = useState({
-    urlShield: true,
-    gmailOverlay: true,
-    autoAadhaar: true
-  });
+  const [settings, setSettings] = useState({ urlShield: true, gmailOverlay: true, autoAadhaar: true });
 
   const navRef = useRef(null);
   const [pillStyle, setPillStyle] = useState({ transform: 'translateX(0px)', width: '0px' });
 
-  // Update sliding pill indicator position whenever activeTab changes
+  // Sliding pill indicator
   useEffect(() => {
     if (!navRef.current) return;
-    const tabIndex = TABS.findIndex(t => t.id === activeTab);
+    const idx = TABS.findIndex(t => t.id === activeTab);
     const buttons = navRef.current.querySelectorAll('.nav-tab-btn');
-    if (buttons[tabIndex]) {
-      const btn = buttons[tabIndex];
-      setPillStyle({
-        transform: `translateX(${btn.offsetLeft}px)`,
-        width: `${btn.offsetWidth}px`
-      });
+    if (buttons[idx]) {
+      const btn = buttons[idx];
+      setPillStyle({ transform: `translateX(${btn.offsetLeft}px)`, width: `${btn.offsetWidth}px` });
     }
   }, [activeTab]);
 
-  // Apply theme & mode to DOM root element
+  // Sync theme/mode to DOM + storage
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     document.documentElement.setAttribute('data-mode', mode);
     localStorage.setItem('sentinel_theme', theme);
     localStorage.setItem('sentinel_mode', mode);
-
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
       chrome.storage.local.set({ sentinel_theme: theme, sentinel_mode: mode });
     }
   }, [theme, mode]);
 
+  // On mount: check backend + get active tab + silently restore token
   useEffect(() => {
     checkBackendHealth();
     fetchActiveTabUrl();
+    tryRestoreSession();
   }, [backendUrl]);
+
+  // ── Backend ───────────────────────────────────────────────────────────────
 
   const checkBackendHealth = async () => {
     try {
       const res = await fetch(`${backendUrl}/api/health`);
-      if (res.ok) {
-        setBackendOnline(true);
-      } else {
-        setBackendOnline(false);
-      }
+      setBackendOnline(res.ok);
     } catch {
       setBackendOnline(false);
     }
   };
 
   const fetchActiveTabUrl = () => {
-    if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
+    if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs && tabs[0] && tabs[0].url) {
-          const tabUrl = tabs[0].url;
-          setCurrentUrl(tabUrl);
-          scanUrlTarget(tabUrl);
-        } else {
-          setCurrentUrl("https://mail.google.com");
-          scanUrlTarget("https://mail.google.com");
-        }
+        const url = tabs?.[0]?.url || 'https://mail.google.com';
+        setCurrentUrl(url);
+        scanUrlTarget(url);
       });
     } else {
-      const fallbackUrl = "https://mail.google.com";
-      setCurrentUrl(fallbackUrl);
-      scanUrlTarget(fallbackUrl);
+      const url = 'https://mail.google.com';
+      setCurrentUrl(url);
+      scanUrlTarget(url);
     }
   };
-
   const scanUrlTarget = async (url) => {
     if (!url || url.startsWith('chrome://') || url.startsWith('about:')) {
       setScanResult({
         risk_level: 'safe',
         safety_score: 100,
-        markers: [{
-          id: 'internal_browser',
-          title: 'Browser Internal Page',
-          description: 'Standard secure internal browser interface.',
-          severity: 'safe'
-        }]
+        markers: [{ id: 'internal_browser', title: 'Browser Internal Page', description: 'Standard secure internal browser page.', severity: 'safe' }]
       });
+      setLoading(false);
       return;
     }
-
     setLoading(true);
     try {
       const res = await fetch(`${backendUrl}/api/scan-url`, {
@@ -146,93 +128,92 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url })
       });
-
       if (res.ok) {
-        const data = await res.json();
-        setScanResult(data);
-      } else {
-        throw new Error('Backend offline');
+        setScanResult(await res.json());
+        return;
       }
+      throw new Error('Backend scan failed');
     } catch {
       const isHttps = url.startsWith('https://');
-      const isGoogle = url.includes('google.com') || url.includes('mail.google.com');
       setScanResult({
         risk_level: isHttps ? 'safe' : 'danger',
-        safety_score: isGoogle ? 99 : (isHttps ? 85 : 30),
-        markers: isHttps ? [
-          {
-            id: 'verified_https',
-            title: 'TLS/HTTPS Secure Connection',
-            description: 'Encrypted communication channel active with verified domain certificate.',
-            severity: 'safe'
-          }
-        ] : [
-          {
-            id: 'insecure_http',
-            title: 'Unencrypted HTTP Connection',
-            description: 'Data transmitted in plain text without cryptographic verification.',
-            severity: 'danger'
-          }
-        ]
+        safety_score: isHttps ? 85 : 30,
+        markers: isHttps
+          ? [{ id: 'verified_https', title: 'TLS/HTTPS Secure Connection', description: 'Encrypted channel active.', severity: 'safe' }]
+          : [{ id: 'insecure_http', title: 'Unencrypted HTTP', description: 'Data transmitted without encryption.', severity: 'danger' }]
       });
     } finally {
       setLoading(false);
     }
   };
 
-  const toggleTheme = () => {
-    setTheme(prev => prev === 'cold' ? 'warm' : 'cold');
+  // ── Google OAuth ──────────────────────────────────────────────────────────
+
+  /**
+   * Try to silently restore the user's session without showing a popup.
+   * This runs every time the extension popup opens.
+   */
+  const tryRestoreSession = async () => {
+    if (googleUser) {
+      // User was previously signed in — try to silently get a fresh token
+      const { getTokenSilent } = await import('./gmailApi');
+      const tok = await getTokenSilent();
+      if (tok) {
+        setAccessToken(tok);
+      } else {
+        // Token is gone (user signed out from Chrome or revoked) — clear local state
+        setGoogleUser(null);
+        setAccessToken(null);
+        localStorage.removeItem('sentinel_google_user');
+      }
+    }
   };
 
-  const toggleMode = () => {
-    setMode(prev => prev === 'dark' ? 'light' : 'dark');
+  /**
+   * Sign in interactively. Shows the Google account chooser if needed.
+   */
+  const handleGoogleSignIn = async () => {
+    setAuthLoading(true);
+    try {
+      const tok = await getToken(true);
+      setAccessToken(tok);
+      const profile = await fetchUserProfile(tok);
+      setGoogleUser(profile);
+      localStorage.setItem('sentinel_google_user', JSON.stringify(profile));
+    } catch (err) {
+      console.warn('[Sentinel AI] Sign-in failed:', err.message);
+      alert(`Google Sign-In failed: ${err.message}\n\nMake sure your OAuth Client ID is set in manifest.json and the extension is listed in the Google Cloud Console.`);
+    } finally {
+      setAuthLoading(false);
+    }
   };
+
+  /**
+   * Sign out: revoke token and clear all stored user data.
+   */
+  const handleGoogleSignOut = async () => {
+    if (accessToken) {
+      await revokeToken(accessToken);
+    }
+    setGoogleUser(null);
+    setAccessToken(null);
+    localStorage.removeItem('sentinel_google_user');
+  };
+
+  // ── Settings helpers ──────────────────────────────────────────────────────
+
+  const toggleTheme = () => setTheme(prev => prev === 'cold' ? 'warm' : 'cold');
+  const toggleMode = () => setMode(prev => prev === 'dark' ? 'light' : 'dark');
 
   const updateSettingField = (key, value) => {
     setSettings(prev => ({ ...prev, [key]: value }));
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
       chrome.storage.local.set({ [`sentinel_${key}`]: value });
     }
   };
 
-  // Auth0 Login Handler (via chrome.identity or mock fallback)
-  const handleAuth0Login = () => {
-    if (typeof chrome !== 'undefined' && chrome.identity && chrome.identity.launchWebAuthFlow) {
-      const domain = localStorage.getItem('sentinel_auth0_domain') || 'sentinel-ai.us.auth0.com';
-      const clientId = localStorage.getItem('sentinel_auth0_client_id') || 'aBc123SentinelClientId';
-      const redirectUri = chrome.identity.getRedirectURL();
-
-      const authUrl = `https://${domain}/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&scope=openid%20profile%20email%20https://www.googleapis.com/auth/gmail.readonly&connection=google-oauth2`;
-
-      chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true }, (responseUrl) => {
-        if (chrome.runtime.lastError || !responseUrl) {
-          // If custom domain isn't registered yet, provide instant simulated profile
-          const sampleUser = { name: "Security Officer", email: "user@sentinelai.security", sub: "google-oauth2|12345" };
-          setAuth0User(sampleUser);
-          localStorage.setItem('sentinel_auth0_user', JSON.stringify(sampleUser));
-          return;
-        }
-        // Extract token
-        const sampleUser = { name: "Verified User", email: "user@gmail.com", sub: "google-oauth2|active" };
-        setAuth0User(sampleUser);
-        localStorage.setItem('sentinel_auth0_user', JSON.stringify(sampleUser));
-      });
-    } else {
-      // Browser preview simulated login
-      const sampleUser = { name: "Security Officer", email: "user@sentinelai.security", sub: "google-oauth2|12345" };
-      setAuth0User(sampleUser);
-      localStorage.setItem('sentinel_auth0_user', JSON.stringify(sampleUser));
-    }
-  };
-
-  const handleAuth0Logout = () => {
-    setAuth0User(null);
-    localStorage.removeItem('sentinel_auth0_user');
-  };
-
   return (
     <div className="app-container">
-      {/* Header with full logo and quick controls */}
       <Header
         theme={theme}
         mode={mode}
@@ -243,7 +224,6 @@ export default function App() {
         backendOnline={backendOnline}
       />
 
-      {/* Modern Sliding Segmented Pill Navigation */}
       <nav className="nav-tabs" ref={navRef}>
         <div className="nav-indicator" style={pillStyle} />
         {TABS.map(tab => (
@@ -252,13 +232,11 @@ export default function App() {
             className={`nav-tab-btn ${activeTab === tab.id ? 'active' : ''}`}
             onClick={() => setActiveTab(tab.id)}
           >
-            {tab.icon}
-            {tab.label}
+            {tab.icon}{tab.label}
           </button>
         ))}
       </nav>
 
-      {/* Main Content Area with Staggered Entrance Animation */}
       <main className="content-area">
         <div key={activeTab} className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {activeTab === 'overview' && (
@@ -271,15 +249,17 @@ export default function App() {
               onRescan={() => scanUrlTarget(currentUrl)}
             />
           )}
-
           {activeTab === 'email' && (
             <EmailScannerTab
               theme={theme}
               mode={mode}
               backendUrl={backendUrl}
+              googleUser={googleUser}
+              accessToken={accessToken}
+              onSignIn={handleGoogleSignIn}
+              authLoading={authLoading}
             />
           )}
-
           {activeTab === 'privacy' && (
             <PrivacyGuardTab
               theme={theme}
@@ -290,7 +270,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -304,12 +283,12 @@ export default function App() {
         setBackendUrl={setBackendUrl}
         backendOnline={backendOnline}
         checkBackendHealth={checkBackendHealth}
-        auth0User={auth0User}
-        onAuth0Login={handleAuth0Login}
-        onAuth0Logout={handleAuth0Logout}
+        googleUser={googleUser}
+        authLoading={authLoading}
+        onSignIn={handleGoogleSignIn}
+        onSignOut={handleGoogleSignOut}
       />
 
-      {/* History Modal */}
       <HistoryModal
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}

@@ -12,6 +12,11 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+html {
+  background: var(--bg-app);
+  border-radius: 0;
+}
+
 body {
   width: 390px;
   height: 580px;
@@ -19,6 +24,7 @@ body {
   background: var(--bg-app);
   color: var(--text-main);
   user-select: none;
+  border-radius: 0;
 }
 
 #root {
@@ -28,7 +34,7 @@ body {
   flex-direction: column;
 }
 
-/* App Container with Glassmorphism & Background Glow */
+/* App Container with Full Bleed Native Frame */
 .app-container {
   width: 100%;
   height: 100%;
@@ -37,15 +43,17 @@ body {
   background: var(--bg-gradient);
   position: relative;
   overflow: hidden;
+  border-radius: 0;
+  border: none;
 }
 
 /* -----------------------------------------------------------------------------
-   Native Apple Motion & Keyframes
+   Native Apple Motion & Keyframes (Deliberate & Smooth)
    ----------------------------------------------------------------------------- */
 @keyframes fadeInUp {
   0% {
     opacity: 0;
-    transform: translateY(8px) scale(0.985);
+    transform: translateY(10px) scale(0.98);
   }
   100% {
     opacity: 1;
@@ -56,7 +64,7 @@ body {
 @keyframes slideUpModal {
   0% {
     opacity: 0;
-    transform: translateY(24px) scale(0.97);
+    transform: translateY(28px) scale(0.96);
   }
   100% {
     opacity: 1;
@@ -69,12 +77,13 @@ body {
   100% { opacity: 1; }
 }
 
+/* Deliberate 0.4s Apple Spring Easing */
 .animate-fade-in {
-  animation: fadeInUp 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .animate-slide-up {
-  animation: slideUpModal 0.26s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: slideUpModal 0.38s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* -----------------------------------------------------------------------------
@@ -107,7 +116,7 @@ body {
   max-width: 160px;
   display: block;
   object-fit: contain;
-  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .brand-logo-img:hover {
@@ -131,7 +140,7 @@ body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .icon-btn:hover {
@@ -152,7 +161,7 @@ body {
 }
 
 /* -----------------------------------------------------------------------------
-   Sliding Segmented Control Navigation Tabs (macOS Native Pill)
+   Sliding Segmented Control Navigation Tabs (Smooth 0.44s Slower Slide)
    ----------------------------------------------------------------------------- */
 .nav-tabs {
   position: relative;
@@ -161,7 +170,6 @@ body {
   gap: 4px;
   background: var(--surface-glass);
   border-bottom: 1px solid var(--border-subtle);
-  border-radius: 0;
 }
 
 .nav-indicator {
@@ -171,8 +179,8 @@ body {
   left: 0;
   border-radius: var(--radius-sm);
   background: var(--accent-color);
-  box-shadow: 0 2px 10px var(--accent-glow);
-  transition: transform 0.26s cubic-bezier(0.16, 1, 0.3, 1), width 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 2px 12px var(--accent-glow);
+  transition: transform 0.44s cubic-bezier(0.16, 1, 0.3, 1), width 0.44s cubic-bezier(0.16, 1, 0.3, 1);
   z-index: 1;
 }
 
@@ -187,7 +195,7 @@ body {
   font-weight: 600;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: color 0.2s ease, transform 0.15s ease;
+  transition: color 0.3s ease, transform 0.2s ease;
   text-align: center;
   display: flex;
   align-items: center;
@@ -201,7 +209,7 @@ body {
 }
 
 .nav-tab-btn:active {
-  transform: scale(0.96);
+  transform: scale(0.95);
 }
 
 .nav-tab-btn.active {
@@ -248,7 +256,7 @@ body {
   overflow: hidden;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .status-hero-card:hover {
@@ -281,7 +289,7 @@ body {
   width: auto;
   display: block;
   object-fit: contain;
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
   filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.3));
 }
 
@@ -359,7 +367,7 @@ body {
   padding: 14px;
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(8px);
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .card-title {
@@ -373,7 +381,7 @@ body {
 }
 
 /* -----------------------------------------------------------------------------
-   Threat Markers Accordion / List
+   Threat Markers List
    ----------------------------------------------------------------------------- */
 .markers-list {
   display: flex;
@@ -389,7 +397,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .marker-item:hover {
@@ -469,7 +477,7 @@ body {
   line-height: 1.4;
   resize: vertical;
   outline: none;
-  transition: all 0.2s ease;
+  transition: all 0.22s ease;
 }
 
 .textarea-clean:focus {
@@ -487,7 +495,7 @@ body {
   color: var(--text-main);
   font-size: 12px;
   outline: none;
-  transition: all 0.2s ease;
+  transition: all 0.22s ease;
 }
 
 .input-clean:focus {
@@ -508,7 +516,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.24s cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow: 0 2px 10px var(--accent-glow);
 }
 
@@ -518,7 +526,7 @@ body {
 }
 
 .btn-primary:active {
-  transform: scale(0.97);
+  transform: scale(0.96);
 }
 
 .btn-secondary {
@@ -534,7 +542,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .btn-secondary:hover {
@@ -544,7 +552,7 @@ body {
 }
 
 .btn-secondary:active {
-  transform: scale(0.97);
+  transform: scale(0.96);
 }
 
 /* -----------------------------------------------------------------------------
@@ -563,7 +571,7 @@ body {
   border-radius: var(--radius-sm);
   padding: 8px 6px;
   text-align: center;
-  transition: transform 0.2s ease;
+  transition: transform 0.22s ease;
 }
 
 .counter-box:hover {
@@ -599,7 +607,8 @@ body {
   z-index: 50;
   display: flex;
   flex-direction: column;
-  animation: modalBackdropFade 0.22s ease-out;
+  animation: modalBackdropFade 0.26s ease-out;
+  border-radius: 18px;
 }
 
 .modal-content {
@@ -608,6 +617,7 @@ body {
   height: 100%;
   display: flex;
   flex-direction: column;
+  border-radius: 18px;
 }
 
 .modal-header {
@@ -641,7 +651,7 @@ body {
   background: var(--surface-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  transition: all 0.2s ease;
+  transition: all 0.22s ease;
 }
 
 .setting-row:hover {
@@ -688,7 +698,7 @@ body {
   right: 0;
   bottom: 0;
   background-color: rgba(255, 255, 255, 0.15);
-  transition: .25s;
+  transition: .28s;
   border-radius: 24px;
   border: 1px solid var(--border-subtle);
 }
@@ -701,7 +711,7 @@ body {
   left: 2px;
   bottom: 2px;
   background-color: white;
-  transition: .25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: .28s cubic-bezier(0.34, 1.56, 0.64, 1);
   border-radius: 50%;
   box-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
@@ -721,7 +731,7 @@ input:checked + .slider:before {
 }
 
 .theme-chip {
-  padding: 5px 10px;
+  padding: 6px 11px;
   border-radius: var(--radius-sm);
   font-size: 11.5px;
   font-weight: 600;
@@ -729,7 +739,12 @@ input:checked + .slider:before {
   background: var(--surface-input);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.theme-chip:hover {
+  border-color: var(--border-card);
+  color: var(--text-main);
 }
 
 .theme-chip:active {

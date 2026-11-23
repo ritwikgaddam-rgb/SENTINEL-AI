@@ -1,6 +1,6 @@
 /**
  * Sentinel AI - Content Script (In-Page Email Guardian for Gmail)
- * Seamlessly integrates security badges & privacy redactions directly into Gmail.
+ * Seamlessly integrates security badges, warning banners & privacy redactions directly into Gmail.
  */
 
 (function () {
@@ -29,7 +29,6 @@
   // Regex patterns from privacy_detector.py
   const aadhaarRegex = /(?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d)/g;
   const phoneRegex = /(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)/g;
-  const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 
   function getLogoSrc() {
     const filename = userTheme === "warm"
@@ -55,7 +54,7 @@
       if (res.ok) {
         return await res.json();
       }
-    } catch (e) {
+    } catch {
       // Local fallback
     }
 
@@ -66,7 +65,7 @@
 
     const markers = [];
     if (hasUrgency) {
-      markers.append({
+      markers.push({
         id: "urgency_trigger",
         title: "High-Pressure Psychological Trigger",
         description: "Message contains urgency keywords common in account-takeover scams.",
@@ -95,97 +94,150 @@
   }
 
   /**
-   * Injects Sentinel AI Badge into opened Gmail message headers
+   * Injects Sentinel AI Long Security Bar into opened Gmail messages
    */
   function inspectGmailMessages() {
     if (!isEnabled) return;
 
-    // Selector for Gmail email message containers
-    const messageHeaders = document.querySelectorAll('.gE.iv.gt, .adn.ads');
-    messageHeaders.forEach(async (header) => {
-      if (header.hasAttribute('data-sentinel-scanned')) return;
-      header.setAttribute('data-sentinel-scanned', 'true');
+    // Target the primary message card container in Gmail exactly once
+    const messageCards = document.querySelectorAll('.adn.ads');
+    messageCards.forEach(async (card) => {
+      if (card.getAttribute('data-sentinel-scanned') === 'true' || card.querySelector('.sentinel-gmail-bar-container')) {
+        return;
+      }
+      card.setAttribute('data-sentinel-scanned', 'true');
 
       // Find message body
-      const emailContainer = header.closest('.gs') || header.parentElement;
-      const bodyEl = emailContainer ? emailContainer.querySelector('.a3s, .ii.gt') : null;
+      const bodyEl = card.querySelector('.a3s, .ii.gt');
       const text = bodyEl ? bodyEl.innerText.trim() : "";
       if (!text || text.length < 15) return;
 
-      const senderEl = header.querySelector('.gD');
+      const senderEl = card.querySelector('.gD');
       const sender = senderEl ? (senderEl.getAttribute('email') || senderEl.innerText) : "";
 
       // Analyze
       const analysis = await analyzeEmail(text, sender);
       const risk = analysis.risk_level || "safe";
+      const isSafe = risk === "safe";
+      const isSuspicious = risk === "suspicious";
 
-      // Create Badge
-      const badge = document.createElement('div');
-      badge.className = `sentinel-gmail-badge theme-${userTheme} ${risk}`;
-      badge.innerHTML = `
-        <img src="${getLogoSrc()}" class="sentinel-badge-logo" alt="Sentinel AI" />
-        <span>${risk === 'safe' ? 'Verified Safe' : risk === 'suspicious' ? 'Caution' : 'Threat Detected'}</span>
-      `;
+      // If suspicious or danger, inject prominent warning banner directly inside email body container
+      if ((risk === "danger" || risk === "suspicious") && bodyEl && !bodyEl.querySelector('.sentinel-threat-banner')) {
+        const banner = document.createElement('div');
+        banner.className = `sentinel-threat-banner ${risk}`;
+        const mainWarning = analysis.markers && analysis.markers[0] ? analysis.markers[0].description : "This email exhibits deceptive phishing heuristics. Proceed with caution.";
+        banner.innerHTML = `
+          <div class="sentinel-threat-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" style="display:block;">
+              <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+          </div>
+          <div class="sentinel-threat-content">
+            <div class="sentinel-threat-heading">
+              <span>Sentinel AI Security Alert (${analysis.safety_score}% Safety Score)</span>
+            </div>
+            <div class="sentinel-threat-details">${mainWarning}</div>
+          </div>
+        `;
+        bodyEl.insertBefore(banner, bodyEl.firstChild);
+      }
 
-      // Create Expandable Popover
-      const popover = document.createElement('div');
-      popover.className = `sentinel-gmail-popover theme-${userTheme}`;
-      popover.style.display = 'none';
+      // Build the Long Security Bar Container
+      const barContainer = document.createElement('div');
+      barContainer.className = `sentinel-gmail-bar-container theme-${userTheme}`;
+
+      const statusTitle = isSafe ? "Verified Safe" : isSuspicious ? "Security Caution" : "Threat Flagged";
+      const statusSummary = isSafe
+        ? "No deceptive links, spoofed headers, or unredacted identity points detected in this message."
+        : (analysis.markers && analysis.markers[0] ? analysis.markers[0].description : "Potential social engineering or phishing markers detected.");
 
       let markersHtml = '';
       if (analysis.markers && analysis.markers.length > 0) {
         markersHtml = analysis.markers.map(m => `
-          <div class="sentinel-popover-marker ${m.severity || 'medium'}">
-            <div class="sentinel-popover-marker-title">${m.title}</div>
-            <div class="sentinel-popover-marker-desc">${m.description}</div>
+          <div class="sentinel-audit-marker ${m.severity || 'medium'}">
+            <div class="sentinel-audit-marker-title">${m.title}</div>
+            <div class="sentinel-audit-marker-desc">${m.description}</div>
           </div>
         `).join('');
       } else {
         markersHtml = `
-          <div class="sentinel-popover-marker safe">
-            <div class="sentinel-popover-marker-title">Clean Audit</div>
-            <div class="sentinel-popover-marker-desc">No deceptive heuristics or privacy violations detected.</div>
+          <div class="sentinel-audit-marker safe">
+            <div class="sentinel-audit-marker-title">No Direct Phishing Flags Found</div>
+            <div class="sentinel-audit-marker-desc">No urgent social engineering patterns, direct credential demands, or rogue external links were detected.</div>
           </div>
         `;
       }
 
-      popover.innerHTML = `
-        <div class="sentinel-popover-header">
-          <div class="sentinel-popover-title">
-            <img src="${getLogoSrc()}" style="height:14px; width:auto;" />
-            <span>Sentinel AI Security Audit</span>
+      barContainer.innerHTML = `
+        <div class="sentinel-gmail-bar ${risk}">
+          <div class="sentinel-bar-left">
+            <img src="${getLogoSrc()}" class="sentinel-bar-logo" alt="Sentinel AI" />
+            <span class="sentinel-bar-title">${statusTitle}</span>
+            <span class="sentinel-bar-sep">•</span>
+            <span class="sentinel-bar-summary">${statusSummary}</span>
           </div>
-          <span style="font-size:11px; opacity:0.8;">${analysis.safety_score}% Safe</span>
+          <div class="sentinel-bar-right">
+            <span class="sentinel-bar-score">${analysis.safety_score}% Safe</span>
+            <button class="sentinel-bar-toggle-btn" type="button">
+              <span>Audit Details</span>
+              <svg class="sentinel-chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+          </div>
         </div>
-        <div>${markersHtml}</div>
-        ${analysis.private_items_count > 0 ? `
-          <div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.1); font-size:11px; display:flex; justify-content:space-between; align-items:center;">
-            <span>🛡️ ${analysis.private_items_count} Identity points exposed</span>
+
+        <div class="sentinel-gmail-audit-drawer" style="display: none;">
+          <div class="sentinel-audit-header">
+            <div class="sentinel-audit-title">
+              <img src="${getLogoSrc()}" style="height:14px; width:auto;" />
+              <span>Sentinel AI Security Audit</span>
+            </div>
+            <span class="sentinel-audit-score">${analysis.safety_score}% Safe</span>
           </div>
-        ` : ''}
+          <div class="sentinel-audit-markers-list">
+            ${markersHtml}
+          </div>
+          ${analysis.private_items_count > 0 ? `
+            <div class="sentinel-audit-privacy-footer">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              </svg>
+              <span>${analysis.private_items_count} Sensitive identity point(s) detected</span>
+            </div>
+          ` : ''}
+        </div>
       `;
 
-      badge.addEventListener('click', (e) => {
+      // Drawer toggle handler
+      const toggleBtn = barContainer.querySelector('.sentinel-bar-toggle-btn');
+      const barEl = barContainer.querySelector('.sentinel-gmail-bar');
+      const drawerEl = barContainer.querySelector('.sentinel-gmail-audit-drawer');
+      const chevronEl = barContainer.querySelector('.sentinel-chevron-icon');
+
+      const toggleDrawer = (e) => {
         e.stopPropagation();
-        popover.style.display = popover.style.display === 'none' ? 'block' : 'none';
-      });
-
-      // Close on clicking outside
-      document.addEventListener('click', (e) => {
-        if (!badge.contains(e.target) && !popover.contains(e.target)) {
-          popover.style.display = 'none';
+        const isOpen = drawerEl.style.display !== 'none';
+        drawerEl.style.display = isOpen ? 'none' : 'block';
+        if (chevronEl) {
+          chevronEl.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
         }
-      });
+      };
 
-      const wrapper = document.createElement('div');
-      wrapper.style.position = 'relative';
-      wrapper.style.display = 'inline-block';
-      wrapper.appendChild(badge);
-      wrapper.appendChild(popover);
+      if (toggleBtn) toggleBtn.addEventListener('click', toggleDrawer);
+      if (barEl) barEl.addEventListener('click', toggleDrawer);
 
-      // Attach next to subject / sender area
-      const dateArea = header.querySelector('.g3') || header.querySelector('.gK') || header;
-      dateArea.parentNode.insertBefore(wrapper, dateArea);
+      // Insert the long bar directly under the sender/date header (.gE.iv.gt)
+      const headerRow = card.querySelector('.gE.iv.gt');
+      if (headerRow && headerRow.nextSibling) {
+        headerRow.parentNode.insertBefore(barContainer, headerRow.nextSibling);
+      } else if (headerRow) {
+        headerRow.parentNode.appendChild(barContainer);
+      } else {
+        card.insertBefore(barContainer, card.firstChild);
+      }
     });
   }
 
@@ -211,7 +263,6 @@
 
       container.appendChild(indicator);
 
-      // Listen for typing events to check for Aadhaar or Phone numbers
       editor.addEventListener('input', () => {
         const text = editor.innerText || editor.textContent || "";
         const aadhaars = text.match(aadhaarRegex) || [];
@@ -231,7 +282,6 @@
         }
       });
 
-      // Clicking indicator offers 1-click automatic redaction
       indicator.addEventListener('click', (e) => {
         e.stopPropagation();
         let text = editor.innerHTML;
@@ -255,7 +305,6 @@
     });
   }
 
-  // Run observer continuously
   const observer = new MutationObserver(() => {
     inspectGmailMessages();
     inspectGmailCompose();
@@ -263,7 +312,6 @@
 
   observer.observe(document.body, { childList: true, subtree: true });
 
-  // Initial pass
   setTimeout(() => {
     inspectGmailMessages();
     inspectGmailCompose();
