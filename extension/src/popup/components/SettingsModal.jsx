@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 
 // Icon variants for toolbar icon picker
 const ICON_VARIANTS = [
-  { id: 'purple_minimal', label: 'Purple Minimal', desc: 'Sapphire compact',   preview: 'logos/purple_minimal_48.png', paths: { 16: 'logos/purple_minimal_16.png', 32: 'logos/purple_minimal_32.png', 48: 'logos/purple_minimal_48.png', 128: 'logos/purple_minimal_128.png' } },
-  { id: 'orange_minimal', label: 'Orange Minimal', desc: 'Ember compact',      preview: 'logos/orange_minimal_48.png', paths: { 16: 'logos/orange_minimal_16.png', 32: 'logos/orange_minimal_32.png', 48: 'logos/orange_minimal_48.png', 128: 'logos/orange_minimal_128.png' } },
+  { id: 'purple_minimal', label: 'Cold', desc: 'Minimal compact', preview: 'logos/purple_minimal_48.png', paths: { 16: 'logos/purple_minimal_16.png', 32: 'logos/purple_minimal_32.png', 48: 'logos/purple_minimal_48.png', 128: 'logos/purple_minimal_128.png' } },
+  { id: 'orange_minimal', label: 'Warm', desc: 'Minimal compact', preview: 'logos/orange_minimal_48.png', paths: { 16: 'logos/orange_minimal_16.png', 32: 'logos/orange_minimal_32.png', 48: 'logos/orange_minimal_48.png', 128: 'logos/orange_minimal_128.png' } },
 ];
 
 export default function SettingsModal({
@@ -165,13 +165,13 @@ export default function SettingsModal({
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07L19.07 4.93"></path>
                 </svg>
-                Cold Sapphire
+                Cold
               </button>
               <button className={`theme-chip ${theme === 'warm' ? 'active' : ''}`} onClick={() => setTheme('warm')} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path>
                 </svg>
-                Warm Ember
+                Warm
               </button>
             </div>
           </div>

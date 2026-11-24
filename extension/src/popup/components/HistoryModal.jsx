@@ -83,7 +83,7 @@ export default function HistoryModal({ isOpen, onClose, backendUrl, backendOnlin
               </p>
               <button
                 className="btn-secondary"
-                style={{ alignSelf: 'center', marginTop: '4px', height: '28px', fontSize: '11px' }}
+                style={{ alignSelf: 'center', marginTop: '4px', height: '28px', fontSize: '11px', paddingLeft: '5px', paddingRight: '5px' }}
                 onClick={fetchHistory}
               >
                 Retry Connection

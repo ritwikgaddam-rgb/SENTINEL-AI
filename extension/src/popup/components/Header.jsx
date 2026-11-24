@@ -43,7 +43,7 @@ export default function Header({
         <button
           className={`icon-btn ${theme === 'warm' ? 'active' : ''}`}
           onClick={onToggleTheme}
-          title={theme === 'cold' ? 'Switch to Warm Ember Theme (#541504)' : 'Switch to Cold Sapphire Theme (#03094b)'}
+          title={theme === 'cold' ? 'Switch to Warm Theme (#541504)' : 'Switch to Cold Theme (#03094b)'}
         >
           {theme === 'cold' ? (
             /* Sleek Ice Crystal / Diamond Vector */
