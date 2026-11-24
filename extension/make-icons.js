@@ -2,7 +2,9 @@ const sharp = require("sharp");
 
 const logos = [
     ["public/logos/SentinelAILogoIconOnlySentinel(Purple).svg", "purple_minimal"],
-    ["public/logos/SentinelAILogoIcon-SentinelOnly(Orange).svg", "orange_minimal"]
+    ["public/logos/SentinelAILogoIcon-SentinelOnly(Orange).svg", "orange_minimal"],
+    ["public/logos/SentinelAILogoIcon(Purple).svg", "purple_emblem"],
+    ["public/logos/SentinelAILogoIcon(Orange).svg", "orange_emblem"]
 ];
 
 (async () => {

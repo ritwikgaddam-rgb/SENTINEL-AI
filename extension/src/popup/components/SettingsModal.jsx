@@ -4,6 +4,8 @@ import React, { useState, useEffect } from 'react';
 const ICON_VARIANTS = [
   { id: 'purple_minimal', label: 'Cold', desc: 'Minimal compact', preview: 'logos/purple_minimal_48.png', paths: { 16: 'logos/purple_minimal_16.png', 32: 'logos/purple_minimal_32.png', 48: 'logos/purple_minimal_48.png', 128: 'logos/purple_minimal_128.png' } },
   { id: 'orange_minimal', label: 'Warm', desc: 'Minimal compact', preview: 'logos/orange_minimal_48.png', paths: { 16: 'logos/orange_minimal_16.png', 32: 'logos/orange_minimal_32.png', 48: 'logos/orange_minimal_48.png', 128: 'logos/orange_minimal_128.png' } },
+  { id: 'purple_emblem', label: 'Cold Emblem', desc: 'No background', preview: 'logos/purple_emblem_48.png', transparent: true, paths: { 16: 'logos/purple_emblem_16.png', 32: 'logos/purple_emblem_32.png', 48: 'logos/purple_emblem_48.png', 128: 'logos/purple_emblem_128.png' } },
+  { id: 'orange_emblem', label: 'Warm Emblem', desc: 'No background', preview: 'logos/orange_emblem_48.png', transparent: true, paths: { 16: 'logos/orange_emblem_16.png', 32: 'logos/orange_emblem_32.png', 48: 'logos/orange_emblem_48.png', 128: 'logos/orange_emblem_128.png' } },
 ];
 
 export default function SettingsModal({
@@ -23,7 +25,7 @@ export default function SettingsModal({
   const [testingPing, setTestingPing]   = useState(false);
   const [pingResult, setPingResult]     = useState(null);
   const [selectedIcon, setSelectedIcon] = useState(
-    () => localStorage.getItem('sentinel_toolbar_icon') || 'purple_shield'
+    () => localStorage.getItem('sentinel_toolbar_icon') || 'purple_minimal'
   );
   const [iconApplied, setIconApplied]   = useState(false);
 
@@ -227,7 +229,7 @@ export default function SettingsModal({
                     background: isActive ? 'var(--surface-highlight)' : 'var(--surface-card)',
                     cursor: 'pointer', transition: 'all 0.18s cubic-bezier(0.16,1,0.3,1)', position: 'relative', outline: 'none'
                   }}>
-                    <div style={{ width: '36px', height: '36px', borderRadius: '8px', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: variant.id.startsWith('orange') ? '#541504' : '#03094b', border: `1px solid ${variant.id.startsWith('orange') ? 'rgba(255,120,88,0.3)' : 'rgba(88,120,255,0.3)'}` }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '8px', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: variant.transparent ? 'transparent' : variant.id.startsWith('orange') ? '#541504' : '#03094b', border: `1px solid ${variant.id.startsWith('orange') ? 'rgba(255,120,88,0.3)' : 'rgba(88,120,255,0.3)'}` }}>
                       <img src={variant.preview} alt={variant.label} style={{ height: '24px', width: 'auto', objectFit: 'contain', display: 'block' }} onError={e => { e.target.style.display = 'none'; }} />
                     </div>
                     <div style={{ textAlign: 'center' }}>

@@ -37,6 +37,18 @@ const ICON_PATHS = {
     32: "logos/orange_minimal_32.png",
     48: "logos/orange_minimal_48.png",
     128: "logos/orange_minimal_128.png"
+  },
+  purple_emblem: {
+    16: "logos/purple_emblem_16.png",
+    32: "logos/purple_emblem_32.png",
+    48: "logos/purple_emblem_48.png",
+    128: "logos/purple_emblem_128.png"
+  },
+  orange_emblem: {
+    16: "logos/orange_emblem_16.png",
+    32: "logos/orange_emblem_32.png",
+    48: "logos/orange_emblem_48.png",
+    128: "logos/orange_emblem_128.png"
   }
 };
 
