@@ -79,7 +79,7 @@ export default function HistoryModal({ isOpen, onClose, backendUrl, backendOnlin
                 Backend Offline
               </div>
               <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                Start the backend in your terminal with <code>./start_backend.sh</code> to sync live threat history with the SQLite database.
+                Start the backend in your terminal with <code>./start_backend.sh</code> on Mac/Linux or <code>start_backend.bat</code> on Windows to sync live threat history with the SQLite database.
               </p>
               <button
                 className="btn-secondary"
