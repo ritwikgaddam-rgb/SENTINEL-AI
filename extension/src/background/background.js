@@ -103,19 +103,9 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== 'sentinel_scan_selection' || !info.selectionText || tab?.id == null) return;
-  const tabId = tab.id;
-  fetch(BACKEND_URL + '/api/scan-email', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, redirect: 'error',
-    body: JSON.stringify({ text: info.selectionText.slice(0, 20000) }),
-  }).then(async response => {
-    const assessment = response.ok ? (await response.json()).risk_level : 'unavailable';
-    await chrome.action.setBadgeText({ tabId, text: assessment === 'suspicious' ? '!' : '?' });
-  }).catch(() => chrome.action.setBadgeText({ tabId, text: '?' }).catch(() => {}));
-});
-
-chrome.tabs.onUpdated.addListener((tabId, change) => {
-  if (change.status === 'loading') chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
+  if (info.menuItemId === "sentinel_scan_selection" && info.selectionText) {
+    console.log("[Sentinel AI] Selected text for audit:", info.selectionText.substring(0, 50));
+  }
 });
 
 // Listen for messages from popup or content scripts
@@ -147,37 +137,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // keep sendResponse alive for async
   }
 
-  let path, body;
-  const tabId = sender.tab?.id;
-  if (message.type === "PAGE_WATCH_STOPPED" && tabId != null && sender.frameId === 0) {
-    chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
-    return false;
+  // URL scan passthrough from content script
+  if (message.type === "SCAN_URL") {
+    fetch(`${BACKEND_URL}/api/scan-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: message.url })
+    })
+      .then((res) => res.json())
+      .then((data) => sendResponse({ success: true, data }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
   }
-  if (message.type === "PAGE_OBSERVATIONS" && tabId != null && sender.frameId === 0) {
-    const origin = new URL(sender.url).origin;
-    if (origin !== message.origin || !/^https?:/.test(origin)) return false;
-    path = '/api/scan-page';
-    body = { url: origin, observations: message.observations, preview: true };
-  } else if (message.type === "SCAN_URL") {
-    path = '/api/scan-url';
-    body = { url: message.url };
-  } else if (["SCAN_GMAIL_MESSAGE", "SCAN_GMAIL_DRAFT"].includes(message.type) &&
-      sender.url?.startsWith('https://mail.google.com/') && sender.frameId === 0) {
-    path = message.type === 'SCAN_GMAIL_DRAFT' ? '/api/privacy-redact' : '/api/scan-email';
-    body = { ...message.payload, collect_sample: false, context: 'gmail_compose' };
-  }
-  if (!path) return false;
-  fetch(BACKEND_URL + path, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    redirect: 'error', body: JSON.stringify(body),
-  }).then(async response => {
-    if (!response.ok) throw new Error('Local assessment failed.');
-    const data = await response.json();
-    if (message.type === "PAGE_OBSERVATIONS") {
-      await chrome.action.setBadgeText({ tabId, text: data.risk_level === 'suspicious' ? '!' : '' });
-      if (data.risk_level === 'suspicious') await chrome.action.setBadgeBackgroundColor({ tabId, color: '#B42318' });
-    }
-    sendResponse({ success: true, data });
-  }).catch(() => sendResponse({ success: false, error: 'Local analysis unavailable.' }));
-  return true;
 });

@@ -4,7 +4,7 @@
   "description": "Sentinel AI - Intelligent Phishing Detector and Privacy Guard Chrome Extension",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build && cp manifest.json dist/ && cp src/content/gmailOverlay.css dist/ && cp -r public/logos dist/"
   },
   "dependencies": {
     "react": "^18.3.1",

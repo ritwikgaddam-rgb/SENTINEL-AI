@@ -1,26 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
-import { copyFileSync } from 'node:fs';
-
-function extensionFiles() {
-  let outDir;
-  return {
-    name: 'sentinel-extension-files',
-    apply: 'build',
-    configResolved(config) { outDir = resolve(config.root, config.build.outDir); },
-    closeBundle() {
-      copyFileSync(resolve(__dirname, 'manifest.json'), resolve(outDir, 'manifest.json'));
-      copyFileSync(resolve(__dirname, 'src/content/gmailOverlay.css'), resolve(outDir, 'gmailOverlay.css'));
-    },
-  };
-}
 
 export default defineConfig({
-  plugins: [react(), extensionFiles()],
+  plugins: [react()],
   base: './',
   build: {
-    outDir: process.env.SENTINELAI_EXTENSION_OUT || 'dist',
+    outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {
       input: {

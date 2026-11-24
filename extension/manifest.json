@@ -28,12 +28,8 @@
       "matches": [
         "*://mail.google.com/*"
       ],
-      "js": [
-        "content.js"
-      ],
-      "css": [
-        "gmailOverlay.css"
-      ],
+      "js": ["content.js"],
+      "css": ["gmailOverlay.css"],
       "run_at": "document_idle"
     }
   ],
@@ -41,8 +37,7 @@
     "storage",
     "activeTab",
     "contextMenus",
-    "identity",
-    "scripting"
+    "identity"
   ],
   "oauth2": {
     "client_id": "1017067770103-h9p528629nnn3ffao3kfmr97r1lrgldg.apps.googleusercontent.com",
@@ -67,10 +62,7 @@
         "logos/*.png",
         "gmailOverlay.css"
       ],
-      "matches": [
-        "*://mail.google.com/*",
-        "<all_urls>"
-      ]
+      "matches": ["*://mail.google.com/*", "<all_urls>"]
     }
   ]
 }

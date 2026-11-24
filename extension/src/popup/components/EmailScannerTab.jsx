@@ -10,41 +10,28 @@ function getRiskColor(level, theme, mode) {
   if (level === 'suspicious') {
     return theme === 'cold' && mode === 'dark' ? '#ffffff' : 'var(--color-warning)';
   }
-  return 'var(--text-secondary)';
+  return 'var(--color-safe)';
 }
 
 // ─── Heuristic fallback (no backend) ────────────────────────────────────────
-function heuristicScan() {
-  return { risk_level: 'uncertain', assessment: 'Analysis unavailable',
-    explanation: 'Start the local backend to assess this message.', markers: [] };
-}
+function heuristicScan(text, sender) {
+  const textLower = text.toLowerCase();
+  const hasUrgency = /urgent|suspended|password|verify|immediately|within \d+ hours/.test(textLower);
+  const aadhaarMatches = text.match(/(?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d)/g) || [];
+  const phoneMatches   = text.match(/(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)/g)   || [];
+  const emailMatches   = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g) || [];
 
-function EvidenceDetails({ result }) {
-  return <div className="card-section">
-    <p>{result.explanation}</p>
-    {result.sender && <p>
-      {result.sender.domain && <>Sender domain {result.sender.domain}. </>}
-      {result.sender.reply_to_domain && <>Reply-To domain {result.sender.reply_to_domain}. </>}
-      Sender authentication unavailable.
-    </p>}
-    {result.labels?.length > 0 && <p>Gmail labels {result.labels.join(', ')}</p>}
-    {result.markers?.filter(marker => marker.excerpt).map(marker =>
-      <p key={marker.id}>{marker.title} · <mark>{marker.excerpt}</mark></p>)}
-    {result.links?.length > 0 && <details><summary>{result.links.length} individual link assessments</summary>
-      <ul>{result.links.map((link, index) => <li key={index}>
-        <strong>{link.assessment}</strong> <span style={{ overflowWrap: 'anywhere' }}>{link.url}</span>
-        {link.display_text && <div>Visible label: {link.display_text}</div>}
-        {link.model_observation && <div>{link.model_observation.message}</div>}
-        {link.markers.map(marker => <div key={marker.id}>{marker.description}</div>)}
-      </li>)}</ul>
-      {result.links_limited && <p>Only the first 40 unique links were checked.</p>}
-    </details>}
-    {result.grammar && <details><summary>Writing checks · {result.grammar.count} findings</summary>
-      <p>{result.grammar.status === 'local_languagetool' ? 'Local LanguageTool.' : 'Limited local English checks.'} {result.grammar.per_100_words ?? '—'} findings per 100 words.</p>
-      <ul>{result.grammar.issues.map((issue, index) => <li key={index}>{issue.description} · <mark>{issue.excerpt}</mark>
-        {issue.suggestion && <> → {issue.suggestion}</>}</li>)}</ul>
-    </details>}
-  </div>;
+  const markers = [];
+  if (hasUrgency) markers.push({ id: 'urgency', title: 'High-Pressure Psychological Trigger', description: 'Urgent phrasing designed to rush decision-making.', severity: 'high' });
+  if (aadhaarMatches.length) markers.push({ id: 'aadhaar', title: 'Aadhaar Number Found', description: `${aadhaarMatches.length} Indian national ID number(s) exposed.`, severity: 'danger' });
+
+  return {
+    risk_level: hasUrgency || aadhaarMatches.length ? 'danger' : 'safe',
+    safety_score: hasUrgency || aadhaarMatches.length ? 18 : 85,
+    markers,
+    privacy: { emails: emailMatches, phone_numbers: phoneMatches, aadhaar_numbers: aadhaarMatches },
+    private_items_count: aadhaarMatches.length + phoneMatches.length + emailMatches.length,
+  };
 }
 
 // ─── Single email result card ────────────────────────────────────────────────
@@ -79,7 +66,7 @@ function InboxEmailRow({ email, onSelect, isSelected, theme, mode }) {
         )}
         {email.scanResult && (
           <span style={{ fontSize: '9px', fontWeight: 700, color: getRiskColor(email.scanResult.risk_level, theme, mode), flexShrink: 0 }}>
-            {email.scanResult.risk_level === 'suspicious' ? 'CAUTION' : 'REVIEW'}
+            {email.scanResult.risk_level === 'danger' ? 'THREAT' : email.scanResult.risk_level === 'suspicious' ? 'CAUTION' : 'SAFE'}
           </span>
         )}
       </div>
@@ -97,9 +84,6 @@ function InboxEmailRow({ email, onSelect, isSelected, theme, mode }) {
 export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, accessToken, onSignIn, authLoading }) {
   // Manual paste scanner state
   const [emailText, setEmailText]     = useState('');
-  const [subject, setSubject] = useState('');
-  const [replyTo, setReplyTo] = useState('');
-  const [collectSample, setCollectSample] = useState(false);
   const [sender, setSender]           = useState('');
   const [manualLoading, setManualLoading] = useState(false);
   const [manualResult, setManualResult]   = useState(null);
@@ -116,11 +100,11 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
 
   // ── Manual scanner ─────────────────────────────────────────────────────
   const handleManualScan = async () => {
-    if (!emailText.trim() && !subject.trim()) return;
+    if (!emailText.trim()) return;
     setManualLoading(true);
     setManualResult(null);
     try {
-      const data = await scanEmailWithBackend(backendUrl, { body: emailText, sender, subject, replyTo, collectSample });
+      const data = await scanEmailWithBackend(backendUrl, { body: emailText, sender });
       setManualResult(data);
     } catch {
       setManualResult(heuristicScan(emailText, sender));
@@ -130,8 +114,13 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
   };
 
   const handleRedactAndCopy = async () => {
-    if (typeof manualResult?.redacted_text !== 'string') return;
-    await navigator.clipboard.writeText(manualResult.redacted_text);
+    let cleaned = emailText;
+    if (manualResult?.privacy) {
+      for (const a of manualResult.privacy.aadhaar_numbers || []) cleaned = cleaned.replace(a, '[AADHAAR]');
+      for (const p of manualResult.privacy.phone_numbers  || []) cleaned = cleaned.replace(p, '[PHONE]');
+      for (const e of manualResult.privacy.emails         || []) cleaned = cleaned.replace(e, '[EMAIL]');
+    }
+    await navigator.clipboard.writeText(cleaned);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -202,8 +191,8 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
     ? 'logos/SentinelAILogoIcon-SentinelOnly(Orange).svg'
     : 'logos/SentinelAILogoIconOnlySentinel(Purple).svg';
 
-  const threats = inboxEmails.filter(e => e.scanResult?.risk_level === 'suspicious');
-  const cautions = inboxEmails.filter(e => e.scanResult?.risk_level === 'uncertain');
+  const threats = inboxEmails.filter(e => e.scanResult?.risk_level === 'danger');
+  const cautions = inboxEmails.filter(e => e.scanResult?.risk_level === 'suspicious');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -348,9 +337,9 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
                       <div className="status-info">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                           <span className={`status-badge ${detailResult.risk_level}`}>
-                            {detailResult.assessment}
+                            {detailResult.risk_level === 'danger' ? 'Phishing Threat' : detailResult.risk_level === 'suspicious' ? 'Suspicious' : 'Legitimate'}
                           </span>
-
+                          <span className="score-pill">{detailResult.safety_score}% Safe</span>
                         </div>
                         <h4 className="status-title">{selectedEmail.subject}</h4>
                         <p className="status-desc" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -358,7 +347,6 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
                         </p>
                       </div>
                     </div>
-                    <EvidenceDetails result={detailResult} />
                     <MarkersCard markers={detailResult.markers} title="Email Threat Markers" />
                   </>
                 )}
@@ -378,12 +366,9 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
         </div>
 
         <div className="input-group">
-          <input type="text" className="input-clean" aria-label="Email subject" placeholder="Subject (optional)" value={subject} onChange={e => setSubject(e.target.value)} maxLength={500} />
-          <input type="text" className="input-clean" aria-label="Reply-To address" placeholder="Reply-To (optional)" value={replyTo} onChange={e => setReplyTo(e.target.value)} maxLength={500} />
-          <label><input type="checkbox" checked={collectSample} onChange={e => setCollectSample(e.target.checked)} /> Save derived features from this manual scan</label>
-          <input type="text" className="input-clean" aria-label="Sender address" placeholder="Sender address (optional)" value={sender} onChange={e => setSender(e.target.value)} />
+          <input type="text" className="input-clean" placeholder="Sender address (optional)" value={sender} onChange={e => setSender(e.target.value)} />
           <textarea className="textarea-clean" placeholder="Paste email body, suspicious link, or draft content..." value={emailText} onChange={e => setEmailText(e.target.value)} />
-          <button className="btn-primary" onClick={handleManualScan} disabled={manualLoading || (!emailText.trim() && !subject.trim())}>
+          <button className="btn-primary" onClick={handleManualScan} disabled={manualLoading || !emailText.trim()}>
             {manualLoading ? 'Analyzing...' : 'Analyze for Phishing & Leaks'}
           </button>
         </div>
@@ -400,11 +385,11 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
             <div className="status-info">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                 <span className={`status-badge ${manualResult.risk_level}`}>
-                  {manualResult.assessment}
+                  {manualResult.risk_level === 'danger' ? 'Phishing Threat' : manualResult.risk_level === 'suspicious' ? 'Suspicious Content' : 'Legitimate'}
                 </span>
-
+                <span className="score-pill">{manualResult.safety_score}% Safe</span>
               </div>
-              <h4 className="status-title">{manualResult.sample_id ? 'Features saved for review' : 'Email assessment'}</h4>
+              <h4 className="status-title">{manualResult.risk_level === 'danger' ? 'High Risk Detected' : 'Content Appears Safe'}</h4>
               <p className="status-desc">
                 {manualResult.private_items_count > 0
                   ? `Identified ${manualResult.private_items_count} private identity data points.`
@@ -434,7 +419,6 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
             </div>
           )}
 
-          <EvidenceDetails result={manualResult} />
           <MarkersCard markers={manualResult.markers} title="Suspicious Email Markers & Cues" />
         </>
       )}
