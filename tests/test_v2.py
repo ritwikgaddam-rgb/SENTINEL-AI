@@ -15,6 +15,34 @@ from training.train_reviewed_features import read_features, read_masked_email, t
 
 
 class PrivacyTests(unittest.TestCase):
+    def test_each_category_can_be_redacted_in_isolation(self):
+        base = "23456789012"
+        cases = {
+            "emails": "Email: demo@example.org",
+            "phone_numbers": "Phone: +1 202-555-0100",
+            "aadhaar_numbers": "Aadhaar: " + base + verhoeff.calc_check_digit(base),
+            "addresses": "Mailing address: 18 Oak Road",
+            "postal_codes": "Postal code: SW1A 1AA",
+            "ssn_numbers": "SSN: 123-45-6789",
+            "bank_accounts": "Bank account: 12345678901234",
+            "ifsc_codes": "IFSC: ABCD0123456",
+            "iban_numbers": "IBAN: GB82 WEST 1234 5698 7654 32",
+            "card_numbers": "Debit card: 5555 5555 5555 4444",
+            "pan_numbers": "PAN: ABCPA1234Z",
+            "passport_numbers": "Passport: A1234567",
+            "upi_ids": "UPI ID: demo@bank",
+            "passwords": "Password: test-secret",
+            "api_keys": "API key: demo_key_12345678",
+            "auth_tokens": "Bearer sample_token_12345678",
+        }
+        self.assertEqual(cases.keys(), privacy_detector.PLACEHOLDERS.keys())
+        for kind, text in cases.items():
+            with self.subTest(kind=kind):
+                report = privacy_detector.privacy_report(text)
+                self.assertEqual(report["total_redacted"], 1)
+                self.assertEqual(report["counts"][kind], 1)
+                self.assertIn(privacy_detector.PLACEHOLDERS[kind], report["redacted_text"])
+
     def test_context_and_checksums_prevent_numeric_false_redaction(self):
         aadhaar = "23456789012" + verhoeff.calc_check_digit("23456789012")
         text = f"Order ID: 9876543210; Reference ID: {aadhaar}; Aadhaar: {aadhaar}; Phone: +1 202-555-0100"
@@ -78,6 +106,29 @@ class PrivacyTests(unittest.TestCase):
         )
         self.assertEqual(report["redacted_text"], "Please ship to:\n[ADDRESS].\nThank you.")
 
+    @unittest.skipUnless(privacy_detector.usaddress, "local address parser is unavailable")
+    def test_multiline_address_and_invalid_identifier_reviews(self):
+        base = "23456789012"
+        valid = base + verhoeff.calc_check_digit(base)
+        invalid = valid[:-1] + str((int(valid[-1]) + 1) % 10)
+        text = ("Address:\n123 Example St Apt 4\nWashington, DC 20001\n\n"
+                f"Aadhaar: {invalid}\nTracking: {valid}\n"
+                "Debit card: 4111 1111 1111 1112\nInvoice: 9876543210\nUnrelated: 20001")
+        report = privacy_detector.privacy_report(text)
+        self.assertEqual(report["redacted_text"], text.replace(
+            "123 Example St Apt 4\nWashington, DC 20001", "[ADDRESS]"))
+        invalid_hit, = report["review"]
+        self.assertEqual(invalid_hit["category"], "aadhaar_numbers")
+        self.assertEqual(report["findings"][-1]["validation"], "invalid_format_or_checksum")
+
+    def test_labelled_phone_and_bank_have_distinct_context(self):
+        text = ("Bank account: 9876543210\nInvoice ID: 9876543210\n"
+                "WhatsApp: +91 9123456789\nTelephone: +1 202-555-0101")
+        result = privacy_detector.privacy_report(text)
+        self.assertEqual(result["counts"]["bank_accounts"], 1)
+        self.assertEqual(result["counts"]["phone_numbers"], 2)
+        self.assertIn("Invoice ID: 9876543210", result["redacted_text"])
+
 
 class AssessmentTests(unittest.TestCase):
     def test_conversations_and_privacy_do_not_issue_phishing_alerts(self):
@@ -93,7 +144,8 @@ class AssessmentTests(unittest.TestCase):
             with self.subTest(message=message):
                 result = server.predict_email_risk(message)
                 self.assertNotEqual(result["risk_level"], "suspicious")
-                self.assertIsNone(result["safety_score"])
+                if result["safety_score"] is not None:
+                    self.assertAlmostEqual(result["risk_score"] + result["safety_score"], 100)
 
     def test_subject_sender_link_and_grammar_evidence(self):
         result = server.predict_email_risk(
@@ -116,7 +168,7 @@ class AssessmentTests(unittest.TestCase):
     def test_subject_authentication_is_unavailable_and_sender_lookalike_is_explained(self):
         result = server.predict_email_risk("There was an activity notice. Open your account directly for details.",
                                            sender="PayPal Support <notify@paypаl.com>", subject="Security alert")
-        self.assertEqual(result["assessment"], "Insufficient information")
+        self.assertEqual(result["assessment"], "Caution advised")
         self.assertIn("security_notice_subject", {marker["id"] for marker in result["subject_findings"]})
         self.assertIn("sender_lookalike", {marker["id"] for marker in result["markers"]})
         self.assertEqual(result["sender"]["authentication"], "unavailable")
@@ -126,7 +178,7 @@ class AssessmentTests(unittest.TestCase):
             "Verify your account at https://example.org/settings. Contact support if you need assistance.",
             subject="Account has been suspended",
         )
-        self.assertEqual(result["risk_level"], "uncertain")
+        self.assertNotEqual(result["display_level"], "danger")
         self.assertEqual(len(result["links"]), 1)
 
     def test_reports_credential_requests_without_using_grammar_or_brand_words_as_verdict(self):
@@ -164,8 +216,9 @@ class AssessmentTests(unittest.TestCase):
                     "https://www.youtube.com/results?q=a", "http://example.org"):
             with self.subTest(url=url):
                 response = server.predict_url_risk(url)
-                self.assertNotEqual(response["risk_level"], "suspicious")
-                self.assertIsNone(response["risk_score"])
+                self.assertNotEqual(response["display_level"], "danger")
+                self.assertTrue(0 <= response["risk_score"] <= 100)
+                self.assertAlmostEqual(response["risk_score"] + response["safety_score"], 100)
         self.assertEqual(server.predict_url_risk("https://example.org@example.net/")["risk_level"], "suspicious")
 
     def test_page_signals_need_context(self):
@@ -182,11 +235,25 @@ class AssessmentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             webpage_evidence("https://example.org", combined | {"external_credential_forms": 2})
 
-    def test_url_model_observation_is_never_the_verdict(self):
-        with patch("backend.server.url_model_observations", return_value=[{"status": "flagged", "message": "test"}]):
+    def test_model_only_scores_do_not_issue_authoritative_alerts(self):
+        with patch("backend.server.url_model_observations", return_value=[
+            {"status": "flagged", "phishing_probability": .99, "prediction": "phishing"}
+        ]):
             result = server.predict_url_risk("https://example.org")
-        self.assertEqual(result["model_observation"]["status"], "flagged")
-        self.assertEqual(result["assessment"], "Insufficient information")
+            self.assertEqual(result["model_observation"]["status"], "flagged")
+            self.assertGreater(result["risk_score"], 0)
+            self.assertEqual(result["display_level"], "suspicious")
+            self.assertEqual(result["assessment"], "Caution advised")
+
+    def test_missing_model_and_different_inputs(self):
+        with patch("backend.server.email_model", return_value=None):
+            result = server.predict_email_risk("Let us meet at the library after school. Please bring the homework.")
+            self.assertIsNone(result["safety_score"])
+            self.assertEqual(result["assessment"], "Analysis unavailable")
+        legitimate = server.predict_email_risk("Let us meet at the library after school. Please bring the homework.")
+        phishing = server.predict_email_risk("Please reply with your password.")
+        self.assertLess(legitimate["risk_score"], phishing["risk_score"])
+        self.assertGreater(phishing["risk_score"], 58)
 
 
 class StorageTests(unittest.TestCase):
@@ -285,16 +352,16 @@ class StorageTests(unittest.TestCase):
         with sqlite3.connect(self.threat_db) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM sanitized_samples").fetchone()[0], 0)
 
-    def test_legacy_payloads_preserve_renderable_codes_and_withhold_percentages(self):
+    def test_legacy_payloads_use_neutral_unknown_state_and_all_privacy_categories(self):
         call = self.handler.handle_post
         short = call("/api/scan-email", {"text": "Hello", "preview": True})
         self.assertEqual(short["assessment"], "Insufficient information")
         self.assertEqual(short["evidence_level"], "uncertain")
-        self.assertEqual(short["risk_level"], "suspicious")  # Original card uses amber for this code.
-        self.assertEqual(short["safety_score"], "—")
+        self.assertEqual(short["risk_level"], "unknown")
+        self.assertIsNone(short["safety_score"])
         self.assertEqual(call("/api/v2/scan-email", {"text": "Hello", "preview": True})["risk_level"], "uncertain")
         expanded = call("/api/scan-email", {"text": "IBAN: GB82 WEST 1234 5698 7654 32", "preview": True})
-        self.assertEqual(expanded["private_items_count"], 0)  # The original copy control cannot redact an IBAN.
+        self.assertEqual(expanded["private_items_count"], 1)
         self.assertEqual(expanded["privacy_counts"]["iban_numbers"], 1)
         self.assertEqual(server.get_stats()["total_scans"], 0)
         self.handler.headers["Origin"] = "https://mail.google.com"
@@ -302,6 +369,18 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(overlay["risk_level"], "danger")
         self.assertNotIn("demo@example.org", json.dumps(overlay))
         self.assertNotIn("sample_id", overlay)
+
+    def test_compose_preview_masks_only_metadata_and_selected_audit_counts(self):
+        call = self.handler.handle_post
+        body = "✨ Email: demo@example.org\nEmail: demo@example.org\nAadhaar: 2345-6789-0120"
+        data = call("/api/privacy-redact", {"text": body, "preview": True, "findings_only": True})
+        self.assertEqual(set(data), {"findings", "offset_encoding"})
+        self.assertNotIn("demo@example.org", json.dumps(data))
+        emails = [item for item in data["findings"] if item["category"] == "emails"]
+        self.assertEqual(len(emails), 2)
+        redacted = call("/api/privacy-redact", {"text": body, "selected": [emails[1]["id"]], "context": "gmail_compose"})
+        self.assertEqual(redacted["redacted_text"], body.replace("\nEmail: demo@example.org", "\nEmail: [EMAIL]"))
+        self.assertEqual(server.get_stats()["items_redacted"], 1)
 
     def test_browser_origin_is_restricted(self):
         self.handler.headers["Origin"] = "https://example.org"

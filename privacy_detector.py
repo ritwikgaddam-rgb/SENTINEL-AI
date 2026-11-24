@@ -31,7 +31,7 @@ PLACEHOLDERS = {
 }
 
 ORDINARY_ID = re.compile(
-    r"\b(?:order|invoice|tracking|reference|product|transaction|customer|ticket)"
+    r"\b(?:order|invoice|tracking|reference|product|transaction|customer|ticket|bank account|card)"
     r"(?:[ \t]+(?:number|id|no\.?|code)){0,2}[ \t]*[:=#-]?[ \t]*$", re.I
 )
 NUMBER_KINDS = {"aadhaar_numbers", "phone_numbers", "ssn_numbers", "card_numbers"}
@@ -39,6 +39,11 @@ US_ADDRESS = re.compile(
     r"^[ \t]*((?:[0-9]{1,6}\b|P\.?[ \t]*O\.?[ \t]+Box\b)[^;\r\n]{4,165}?"
     r"\b[A-Z]{2}[ \t]+[0-9]{5}(?:-[0-9]{4})?)[ \t]*[.]?[ \t]*$",
     re.M | re.I,
+)
+US_MULTILINE = re.compile(
+    r"^[ \t]*((?:[0-9]{1,6}\b|P\.?[ \t]*O\.?[ \t]+Box\b)[^;\r\n]{4,95}\r?\n"
+    r"[ \t]*[A-Z][A-Z .'-]{1,50},?[ \t]+[A-Z]{2}[ \t]+[0-9]{5}(?:-[0-9]{4})?)"
+    r"[ \t]*[.]?[ \t]*$", re.M | re.I,
 )
 ADDRESS_PARSER_LOCK = Lock()  # The library reuses a single local CRF tagger.
 
@@ -68,6 +73,7 @@ class Finding:
     end: int
     kind: str
     confidence: str
+    validation: str = "contextual"
 
     @property
     def id(self):
@@ -77,7 +83,7 @@ class Finding:
 def find_findings(text, region="IN"):
     matches = []
 
-    def add(kind, start, end, confidence="high"):
+    def add(kind, start, end, confidence="high", validation="contextual"):
         if start > 0 and (text[start - 1].isalnum() or text[start - 1] == "_"):
             return
         if end < len(text) and (text[end].isalnum() or text[end] == "_"):
@@ -87,7 +93,7 @@ def find_findings(text, region="IN"):
         if kind in NUMBER_KINDS and (re.search(r"[0-9][ \t-]{0,3}-$", text[max(0, start - 6):start])
                                      or re.match(r"-[ \t-]{0,3}[0-9]", text[end:end + 6])):
             return
-        matches.append(Finding(start, end, kind, confidence))
+        matches.append(Finding(start, end, kind, confidence, validation))
 
     def detect(kind, pattern, validator=None, confidence="high"):
         for match in re.finditer(pattern, text, re.IGNORECASE):
@@ -95,7 +101,7 @@ def find_findings(text, region="IN"):
             value = match.group(1)
 
             if validator is None or validator(value):
-                add(kind, start, end, confidence)
+                add(kind, start, end, confidence, "format_valid" if validator else "contextual")
 
     # Email addresses
     detect(
@@ -121,18 +127,19 @@ def find_findings(text, region="IN"):
         if ORDINARY_ID.search(context):
             continue
         if labelled or match.raw_string.startswith("+"):
-            add("phone_numbers", match.start, match.end)
+            add("phone_numbers", match.start, match.end, validation="number_plan_valid")
         else:
-            add("phone_numbers", match.start, match.end, "review")
+            add("phone_numbers", match.start, match.end, "review", "number_plan_valid")
 
     # Aadhaar: context and checksum validation
-    detect(
-        "aadhaar_numbers",
-        r"\b(?:aadhaar|aadhar|uidai)"
-        r"(?:\s+(?:number|no\.?))?\s*(?:is\s*)?[:=]?\s*"
-        r"([2-9][0-9]{3}[ -]?[0-9]{4}[ -]?[0-9]{4})(?![\w-]|[ -]?[0-9])",
-        lambda value: verhoeff.is_valid(digits(value))
-    )
+    for match in re.finditer(
+        r"\b(?:aadhaar|aadhar|uidai)(?:[ \t]+(?:number|no\.?))?[ \t]*(?:is[ \t]+)?[:=]?[ \t]*"
+        r"([0-9]{4}[ -]?[0-9]{4}[ -]?[0-9]{4})(?![\w-]|[ -]?[0-9])", text, re.I,
+    ):
+        number = digits(match[1])
+        valid = number[0] in "23456789" and verhoeff.is_valid(number)
+        add("aadhaar_numbers", *match.span(1), "high" if valid else "review",
+            "checksum_valid" if valid else "invalid_format_or_checksum")
     detect("aadhaar_numbers", r"(?<![\w-])([2-9][0-9]{3}[ -]?[0-9]{4}[ -]?[0-9]{4})(?![\w-]|[ -]?[0-9])",
            lambda value: verhoeff.is_valid(digits(value)), "review")
 
@@ -236,10 +243,10 @@ def find_findings(text, region="IN"):
            r"(?:street|road|avenue|lane|drive|boulevard|court|st|rd|ave|ln|dr|blvd|ct))\b",
            confidence="review")
     detect("addresses", r"\b(P\.?\s*O\.?\s+Box\s+[0-9]{1,10})\b", confidence="review")
-    for match in US_ADDRESS.finditer(text):
-        value = match.group(1)
-        if is_us_address(value):
-            add("addresses", *match.span(1))
+    for pattern in (US_MULTILINE, US_ADDRESS):
+        for match in pattern.finditer(text):
+            if is_us_address(match[1]):
+                add("addresses", *match.span(1), validation="address_components")
 
     # Resolve overlapping detections
     # A stronger or enclosing match takes precedence over a partial suggestion.
@@ -266,19 +273,27 @@ def detect_private_info(text):
     return results
 
 
-def privacy_report(text, approved=(), region="IN"):
-    selected = set(approved)
+def privacy_report(text, approved=(), region="IN", selected=None):
+    approved = set(approved)
+    selected = None if selected is None else set(selected)
     detected = {kind: [] for kind in PLACEHOLDERS}
-    reviews, redactions, pieces = [], [], []
+    reviews, redactions, pieces, findings = [], [], [], []
     cursor = 0
     for hit in find_findings(text, region):
         value = text[hit.start:hit.end]
+        finding = {"id": hit.id, "category": hit.kind, "start": hit.start, "end": hit.end,
+                   "confidence": hit.confidence, "validation": hit.validation, "ambiguous": hit.confidence == "review",
+                   "masked_preview": f"••••{value[-2:]}" if len(value) >= 8 and hit.kind in NUMBER_KINDS else "••••",
+                   "replacement": PLACEHOLDERS[hit.kind]}
+        findings.append(finding)
         if hit.confidence == "review":
             reviews.append({"id": hit.id, "category": hit.kind, "start": hit.start, "end": hit.end,
                             "excerpt": value, "suggested_replacement": PLACEHOLDERS[hit.kind],
-                            "approved": hit.id in selected})
-            if hit.id not in selected:
-                continue
+                            "approved": hit.id in (approved if selected is None else selected)})
+        if (selected is not None and hit.id not in selected) or (
+            selected is None and hit.confidence == "review" and hit.id not in approved
+        ):
+            continue
         detected[hit.kind].append(value)
         redactions.append({"start": hit.start, "end": hit.end, "replacement": PLACEHOLDERS[hit.kind]})
         pieces.extend((text[cursor:hit.start], PLACEHOLDERS[hit.kind]))
@@ -288,7 +303,7 @@ def privacy_report(text, approved=(), region="IN"):
     return {"original_length": len(text), "offset_encoding": "unicode_code_points",
             "redacted_text": "".join(pieces), "detected": detected, "counts": counts,
             "total_redacted": sum(counts.values()), "total_review": len(reviews),
-            "review": reviews, "redactions": redactions}
+            "review": reviews, "redactions": redactions, "findings": findings}
 
 
 def redact_private_info(text):

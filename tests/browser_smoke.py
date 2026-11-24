@@ -97,7 +97,7 @@ def smoke(page, preview, api):
     """)
     page.call("Page.navigate", url=preview + "/popup.html")
     try:
-        wait(lambda: page.has_text("Insufficient information"))
+        wait(lambda: page.has_text("% Safe"))
     except RuntimeError:
         output = page.evaluate("({page: location.href, hasTestPost: !!window.testPost, rendered: document.body?.innerText})")
         raise RuntimeError(f"Shield fixture could not see the expected API response: {output}") from None
@@ -117,6 +117,7 @@ def smoke(page, preview, api):
     page.button("Privacy")
     page.button("Insert Sample")
     wait(lambda: page.has_text("Safe Redacted Preview"))
+    wait(lambda: page.has_text("[AADHAAR]"))
     page.button("Copy Safe Redacted Version")
     wait(lambda: page.evaluate("window.testCopy?.includes('[AADHAAR]')"))
     page.evaluate('document.querySelector(\'button[title="Scan & Audit History"]\').click()')

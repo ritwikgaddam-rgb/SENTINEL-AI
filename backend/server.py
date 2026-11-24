@@ -25,6 +25,7 @@ from database import init_db, log_scan, log_privacy_audit, get_recent_history, g
 from assessments import destination, email_evidence, split_url, url_evidence, webpage_evidence
 import privacy_detector
 import threats
+from scoring import apply_score, email_model, model_observation
 from url_advisory import candidate, extract_features_dict, url_model_observations
 
 
@@ -41,20 +42,23 @@ ALLOWED_ORIGINS = APP_ORIGINS | {"https://mail.google.com"}
 def predict_url_risk(url):
     result = url_evidence(url)
     result["features"] = extract_features_dict(url)
-    result["model_observation"] = url_model_observations([url])[0]
-    result["ml_evaluated"] = result["model_observation"]["status"] != "unavailable"
-    return result
+    return apply_score(result, url_model_observations([url])[0], weight=.70, model_only_caution=True)
 
 
 def predict_email_risk(text, sender="", links=(), subject="", reply_to="", html="", labels=()):
     result = email_evidence(text, sender, links, subject, reply_to, html, labels)
-    privacy = privacy_detector.privacy_report(result.pop("_visible_body"))
+    visible = result.pop("_visible_body")
+    privacy = privacy_detector.privacy_report(visible)
     observations = url_model_observations([link["url"] for link in result["links"]])
     for link, observation in zip(result["links"], observations):
         link["model_observation"] = observation
     result.update({"privacy": privacy["detected"], "private_items_count": privacy["total_redacted"],
                    "privacy_counts": privacy["counts"], "redacted_text": privacy["redacted_text"]})
-    return result
+    # The saved pipeline was fit on bodies. Subject and headers add independent evidence.
+    observation = model_observation(email_model(), [visible], 1, "email-tfidf-v1")[0]
+    link_probability = max((item.get("phishing_probability", 0) for item in observations), default=0)
+    enough = result["risk_level"] == "neutral" or bool(result["markers"] or result["links"])
+    return apply_score(result, observation, weight=.25, enough=enough, link_probability=link_probability)
 
 
 def text_field(body, key, max_chars, default=""):
@@ -81,7 +85,7 @@ def email_features(result):
 
 def legacy_scan_response(result, gmail=False):
     """Adapt evidence to the restored three-state renderer without inventing a score."""
-    level = {"suspicious": "danger", "uncertain": "suspicious", "neutral": "safe"}[result["risk_level"]]
+    level = result["display_level"]
     indicators = result["markers"]
     if not indicators or result["risk_level"] != "suspicious":
         indicators = [{
@@ -93,18 +97,10 @@ def legacy_scan_response(result, gmail=False):
         "id": item["id"], "title": escape(item["title"]), "description": escape(item["description"]),
         "severity": item["severity"] if item["severity"] in {"danger", "high", "medium", "low", "safe"} else "low",
     } for item in indicators]
-    legacy = {"risk_level": level, "safety_score": "—", "markers": markers,
+    legacy = {"risk_level": level, "safety_score": result["safety_score"], "markers": markers,
               "assessment": result["assessment"], "explanation": result["explanation"]}
     if gmail:
         return legacy | {"private_items_count": result.get("private_items_count", 0)}
-    direct_copy_kinds = {"aadhaar_numbers", "phone_numbers", "emails"}
-    if any(count for kind, count in result.get("privacy_counts", {}).items() if kind not in direct_copy_kinds):
-        legacy["private_items_count"] = 0
-        legacy["markers"].append({
-            "id": "full_privacy_review", "title": "Additional sensitive data detected",
-            "description": "Use the V2 redaction endpoint for these categories. The original copy control covers email, phone and Aadhaar.",
-            "severity": "medium",
-        })
     return result | legacy | {"evidence_level": result["risk_level"]}
 
 
@@ -161,13 +157,11 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
             if path in {"/api/health", "/"}:
                 result = {"status": "online", "app": "Sentinel AI Backend API", "version": "2.0.0",
                           "db_status": "connected", "models_loaded": {"url_phishing": candidate() is not None,
-                                                                           "email_phishing": False}}
+                                                                           "email_phishing": email_model() is not None}}
             elif path in {"/api/history", "/api/v2/history"}:
                 limit = query_int(query, "limit", 25, 1, 100)
                 offset = query_int(query, "offset", 0, 0, 1_000_000)
                 history = get_recent_history(limit, offset, kind)
-                if path == "/api/history":
-                    history = [row | {"confidence": "—"} for row in history]
                 result = {"history": history}
             elif path == "/api/stats":
                 result = get_stats()
@@ -245,7 +239,8 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
         if path == "/api/scan-page":
             url = text_field(body, "url", 2083)
             result = webpage_evidence(url, body.get("observations"))
-            result["model_observation"] = url_model_observations([url])[0]
+            apply_score(result, url_model_observations([url])[0], weight=.70,
+                        enough=any(result["observations"].values()))
             if preview:
                 return result
             return self.record_scan("webpage", result, result["observations"], consent)
@@ -259,7 +254,12 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
             region = text_field(body, "region", 2, "IN").upper()
             if region not in privacy_detector.phonenumbers.SUPPORTED_REGIONS:
                 raise ValueError("Unknown phone region.")
-            result = privacy_detector.privacy_report(text, approved, region)
+            selected = list_field(body, "selected", 2000) if "selected" in body else None
+            if selected is not None and any(not isinstance(item, str) or len(item) > 70 for item in selected):
+                raise ValueError("Redaction selections must use returned finding IDs.")
+            result = privacy_detector.privacy_report(text, approved, region, selected)
+            if body.get("findings_only") is True:
+                return {key: result[key] for key in ("findings", "offset_encoding")}
             context = body.get("context")
             if context not in ("extension_redact", "gmail_compose", "manual_scan", "clipboard"):
                 context = "extension_redact"
@@ -288,8 +288,8 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def record_scan(kind, result, features, consent, text_sample=None):
-        log_scan(kind, f"{kind.capitalize()} assessment", result["risk_level"], None,
-                 [{"id": item["id"]} for item in result["markers"]])
+        log_scan(kind, f"{kind.capitalize()} assessment", result["risk_level"], result["risk_score"],
+                 [{"id": item["id"]} for item in result["markers"]], metadata={"screening_score": True})
         if consent:
             result["sample_id"] = threats.collect(kind, features, result["risk_level"], consent, text_sample)
         return result

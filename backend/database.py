@@ -99,7 +99,7 @@ def log_scan(scan_type, target_preview, risk_level, confidence, markers, metadat
         risk_level,
         confidence,
         json.dumps([m["id"] for m in markers or [] if re.fullmatch(r"[a-z_]{1,50}", m.get("id", ""))]),
-        "{}"
+        json.dumps({"screening_score": True}) if (metadata or {}).get("screening_score") is True else "{}"
     ))
     scan_id = cursor.lastrowid
     conn.commit()
@@ -129,7 +129,7 @@ def get_recent_history(limit=20, offset=0, kind=None):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, scan_type, target_preview, risk_level, confidence, markers_json, created_at
+        SELECT id, scan_type, target_preview, risk_level, confidence, metadata_json, created_at
         FROM scan_history
         WHERE (? IS NULL OR scan_type = ?)
         ORDER BY id DESC LIMIT ? OFFSET ?
@@ -137,13 +137,15 @@ def get_recent_history(limit=20, offset=0, kind=None):
     rows = cursor.fetchall()
     history = []
     for r in rows:
+        scored = r["metadata_json"] == '{"screening_score": true}'
         history.append({
             "id": r["id"],
             "scan_type": r["scan_type"],
             "target_preview": f"{r['scan_type'].capitalize()} assessment",
             "risk_level": r["risk_level"],
             "confidence": None,
-            "legacy": r["confidence"] is not None,
+            "legacy": r["confidence"] is not None and not scored,
+            "risk_score": r["confidence"] if scored else None,
             "markers": [],
             "created_at": r["created_at"]
         })

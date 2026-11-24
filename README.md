@@ -36,14 +36,16 @@ Open [the browser preview](http://127.0.0.1:4173/popup.html). In Chrome, use **L
 |---|---|
 | POST /api/v2/scan-email | Accepts text, subject, sender, reply_to, labels, html and links. A link can be a string or a URL and label object. Returns an assessment, verified-in-input evidence excerpts, writing findings, privacy counts and per-link observations. Sender authentication is unavailable until a trusted integration supplies it. |
 | POST /api/v2/scan-url | Accepts url. Returns structural evidence and a separate URL model observation. The response's destination omits user information, queries and fragments. |
-| POST /api/privacy-redact | Accepts text, optional two-letter phone region, and approved review finding IDs. Returns redacted text, counts and spans in Unicode code points, plus ambiguous matches for review. Use preview: true while editing. |
+| POST /api/privacy-redact | Accepts text, optional two-letter phone region, and selected finding IDs. Returns redacted text, counts, Unicode code point spans and masked findings. Use preview: true while editing or findings_only: true to return masked metadata only. |
 | POST /api/scan-page | Accepts url and bounded numeric observations. The backend analyzes related indicators and returns an assessment. The browser must derive observations without reading form values or submitting content. |
 | GET /api/v2/history | Returns metadata-only history. Optional query parameters include kind, limit and offset. |
 | GET /api/health | Reports whether the loopback API and advisory model are available. |
 
-Use preview: true for an assessment without a history write. V2 uses **Suspicious**, **No clear phishing indicators detected** and **Insufficient information**. Confidence fields are null. The system bases alerts on evidence, and keeps privacy detections, grammar findings and model observations separate.
+Use preview: true for an assessment without a history write. Email and URL scans with enough evidence return finite complementary screening scores. Raw model estimates appear separately. The scores summarize evidence and model output. They do not measure the probability that a message or site is safe. Sparse email or unavailable models produce an explicit unscored state.
 
-The restored popup and Gmail overlay keep their existing endpoints. The API maps the new outcome to their existing colors and cards, includes the precise assessment in the existing markers, and supplies a dash while those clients still append a percent suffix. The standalone Privacy tab and Gmail compose control still use their existing local rules. [Frontend integration handoff](V2_REPORT.md#frontend-handoff)
+The Privacy tab and Gmail compose use the same loopback validator. The existing compose pill expands to review categories and choose individual occurrences. Review-only matches start unchecked. Redact all includes the review-only matches. Quotes and signatures stay out of scope unless the user includes them. The pill edits the draft locally and keeps the most recent undo in memory. The Privacy tab uses the existing preview and copy button for validated categories.
+
+For the tested bundle and exact regression results, see the [scoring and privacy verification report](REGRESSION_REPORT.md).
 
 The built-in English writing checks run locally. For broader coverage, start a standalone LanguageTool server on loopback and set SENTINELAI_LANGUAGETOOL_PORT before launching SentinelAI. The app masks URLs, addresses in email syntax, quoted lines, fenced code and conventional signatures before sending prose to that local service. It falls back to built-in rules if the service times out. [LanguageTool setup](https://dev.languagetool.org/http-server.html)
 

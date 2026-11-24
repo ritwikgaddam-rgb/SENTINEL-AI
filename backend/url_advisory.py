@@ -1,4 +1,4 @@
-"""Advisory URL-structure classification. The result never sets the verdict."""
+"""URL-structure features and local model observations."""
 
 from functools import lru_cache
 import ipaddress
@@ -10,8 +10,10 @@ import pandas as pd
 
 try:
     from .assessments import split_url
+    from .scoring import model_observation
 except ImportError:
     from assessments import split_url
+    from scoring import model_observation
 
 
 def extract_features_dict(url: str) -> dict:
@@ -67,28 +69,18 @@ def candidate():
     try:
         model = joblib.load(path)
         return model if set(model.classes_) == {0, 1} else None
-    except (OSError, ValueError, ImportError, AttributeError):
+    except Exception:
         return None
 
 
 def url_model_observations(urls):
     if not urls:
         return []
-    unavailable = {"status": "unavailable", "message": "The experimental URL model is unavailable."}
     model = candidate()
     if model is None:
-        return [unavailable for _ in urls]
+        return model_observation(None, urls, 1, "url-context-v1")
     observations = []
     for url in urls:
         parts, host, _ = split_url(url, assume_https=True)
         observations.append(new_features(parts, host))
-    try:
-        predictions = model.predict(pd.DataFrame(observations, columns=model.feature_names_in_))
-    except (AttributeError, ValueError, TypeError):
-        return [unavailable for _ in urls]
-    return [
-        {"status": "flagged", "message": "The experimental structure model flagged this address for review."}
-        if prediction == 1 else
-        {"status": "not_flagged", "message": "The experimental structure model did not flag this address."}
-        for prediction in predictions
-    ]
+    return model_observation(model, pd.DataFrame(observations, columns=model.feature_names_in_), 1, "url-context-v1")
