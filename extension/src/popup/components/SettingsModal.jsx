@@ -114,7 +114,7 @@ export default function SettingsModal({
                     <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{googleUser.email}</div>
                   </div>
                 </div>
-                <button className="btn-secondary" style={{ height: '28px', fontSize: '11px' }} onClick={onSignOut}>
+                <button className="btn-secondary" style={{ height: '28px', fontSize: '11px', paddingLeft: '11px', paddingRight: '11px' }} onClick={onSignOut}>
                   Disconnect
                 </button>
               </div>
