@@ -21,6 +21,39 @@ PARENT_DIR = os.path.dirname(CURRENT_DIR)
 sys.path.insert(0, CURRENT_DIR)
 sys.path.insert(0, PARENT_DIR)
 
+# Auto-detect virtualenv if running in a Python missing dependencies
+try:
+    import tldextract
+except ImportError:
+    venv_candidates = [
+        os.path.join(PARENT_DIR, ".venv", "bin", "python"),
+        os.path.join(PARENT_DIR, ".venv", "Scripts", "python.exe"),
+        os.path.join(PARENT_DIR, ".runtime", "venv", "bin", "python"),
+        os.path.join(PARENT_DIR, ".runtime", "venv", "Scripts", "python.exe"),
+    ]
+    re_execed = False
+    for venv_py in venv_candidates:
+        if os.path.exists(venv_py) and os.path.realpath(sys.executable) != os.path.realpath(venv_py):
+            try:
+                import subprocess
+                res = subprocess.run([venv_py, "-c", "import tldextract"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if res.returncode == 0:
+                    os.execv(venv_py, [venv_py] + sys.argv)
+                    re_execed = True
+                    break
+            except Exception:
+                pass
+    if not re_execed:
+        sys.stderr.write(
+            "\n" + "=" * 60 + "\n"
+            "Sentinel AI: Missing required Python dependencies!\n\n"
+            "Please run './start_backend.sh' to automatically prepare the\n"
+            "virtual environment, or install dependencies manually:\n"
+            "    pip install -r requirements.txt\n"
+            + "=" * 60 + "\n\n"
+        )
+        sys.exit(1)
+
 from database import init_db, log_scan, log_privacy_audit, get_recent_history, get_stats, get_all_settings, update_setting
 from assessments import destination, email_evidence, split_url, url_evidence, webpage_evidence
 import privacy_detector
@@ -30,12 +63,28 @@ from url_advisory import candidate, extract_features_dict, url_model_observation
 
 
 MAX_REQUEST = 512 * 1024
-EXTENSION_KEY = json.loads((Path(PARENT_DIR) / "extension/manifest.json").read_text())["key"]
-EXTENSION_ID = hashlib.sha256(base64.b64decode(EXTENSION_KEY)).hexdigest()[:32].translate(
-    str.maketrans("0123456789abcdef", "abcdefghijklmnop")
-)
-APP_ORIGINS = {f"chrome-extension://{EXTENSION_ID}", "http://127.0.0.1:5173", "http://localhost:5173",
-               "http://127.0.0.1:4173", "http://localhost:4173"}
+
+# Safely resolve extension key/id without crashing if manifest is missing or formatted differently
+manifest_path = Path(PARENT_DIR) / "extension/manifest.json"
+EXTENSION_KEY = ""
+EXTENSION_ID = ""
+if manifest_path.exists():
+    try:
+        manifest_data = json.loads(manifest_path.read_text())
+        EXTENSION_KEY = manifest_data.get("key", "")
+        if EXTENSION_KEY:
+            EXTENSION_ID = hashlib.sha256(base64.b64decode(EXTENSION_KEY)).hexdigest()[:32].translate(
+                str.maketrans("0123456789abcdef", "abcdefghijklmnop")
+            )
+    except Exception:
+        pass
+
+APP_ORIGINS = {
+    "http://127.0.0.1:5173", "http://localhost:5173",
+    "http://127.0.0.1:4173", "http://localhost:4173"
+}
+if EXTENSION_ID:
+    APP_ORIGINS.add(f"chrome-extension://{EXTENSION_ID}")
 ALLOWED_ORIGINS = APP_ORIGINS | {"https://mail.google.com"}
 
 
@@ -310,4 +359,9 @@ def run_server(port=8000):
 
 
 if __name__ == "__main__":
-    run_server(int(sys.argv[1]) if len(sys.argv) > 1 else 8000)
+    port = 8000
+    for arg in sys.argv[1:]:
+        if arg.isdigit():
+            port = int(arg)
+            break
+    run_server(port)
