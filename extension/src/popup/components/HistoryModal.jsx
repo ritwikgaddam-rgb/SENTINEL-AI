@@ -114,7 +114,7 @@ export default function HistoryModal({ isOpen, onClose, backendUrl, backendOnlin
                 {item.target_preview}
               </div>
               <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>
-                {new Date(item.created_at).toLocaleString()} • Risk Score: {item.confidence}%
+                {new Date(item.created_at).toLocaleString()} • {Number.isFinite(item.risk_score) ? "Risk Score: " + item.risk_score + "%" : "Score unavailable"}
               </div>
             </div>
           ))}

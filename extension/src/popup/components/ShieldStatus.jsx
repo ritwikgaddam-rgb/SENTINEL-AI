@@ -26,8 +26,8 @@ export default function ShieldStatus({
     }
   }
 
-  const riskLevel = scanResult?.risk_level || "safe";
-  const safetyScore = scanResult?.safety_score ?? 98;
+  const riskLevel = scanResult?.risk_level || "unknown";
+  const safetyScore = scanResult?.safety_score;
   const markers = scanResult?.markers || [];
 
   return (
@@ -45,10 +45,10 @@ export default function ShieldStatus({
         <div className="status-info">
           <div className="status-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2px' }}>
             <span className={`status-badge ${riskLevel}`}>
-              {riskLevel === 'safe' ? 'Verified Safe' : riskLevel === 'suspicious' ? 'Caution Advised' : 'Phishing Threat'}
+              {riskLevel === 'safe' ? 'No clear indicators' : riskLevel === 'suspicious' ? 'Caution Advised' : riskLevel === 'danger' ? 'Phishing Threat' : 'No score'}
             </span>
-            <span className="score-pill" title="Sentinel AI Confidence Safety Score">
-              {safetyScore}% Safe
+            <span className="score-pill" title="Sentinel AI screening score">
+              {Number.isFinite(safetyScore) ? safetyScore + '% Safe' : 'Score unavailable'}
             </span>
           </div>
 
@@ -56,11 +56,7 @@ export default function ShieldStatus({
             {currentUrl ? new URL(currentUrl).hostname || currentUrl : "Browser Protected"}
           </h3>
           <p className="status-desc">
-            {riskLevel === 'safe'
-              ? 'No phishing markers or identity data leaks detected.'
-              : riskLevel === 'suspicious'
-              ? 'Anomalies detected in page structure or domain.'
-              : 'Malicious destination or high-risk domain detected.'}
+            {scanResult?.explanation || scanResult?.assessment || 'Waiting for a web address.'}
           </p>
         </div>
       </div>

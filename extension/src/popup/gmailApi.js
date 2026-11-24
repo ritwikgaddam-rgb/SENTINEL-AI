@@ -160,6 +160,7 @@ export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbo
         threadId: msg.threadId,
         subject: getHeader(headers, 'subject') || '(no subject)',
         sender: getHeader(headers, 'from') || 'Unknown Sender',
+        replyTo: getHeader(headers, 'reply-to') || '',
         date: getHeader(headers, 'date') || '',
         snippet: msg.snippet || '',
         body,
@@ -173,7 +174,9 @@ export async function scanEmailWithBackend(backendUrl, emailObj) {
   const res = await fetch(`${backendUrl}/api/scan-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: emailObj.body || emailObj.snippet, sender: emailObj.sender })
+    body: JSON.stringify({ text: (emailObj.body || emailObj.snippet || '').slice(0, 20000),
+      sender: emailObj.sender?.slice(0, 500), subject: emailObj.subject?.slice(0, 500),
+      reply_to: emailObj.replyTo?.slice(0, 500), labels: emailObj.labelIds?.slice(0, 50) })
   });
   if (!res.ok) throw new Error('Backend scan failed');
   return res.json();

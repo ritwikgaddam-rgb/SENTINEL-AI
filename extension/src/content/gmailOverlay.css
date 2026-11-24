@@ -395,3 +395,55 @@
   padding: 1px 4px !important;
   line-height: 1 !important;
 }
+
+/* Expanded state only. The existing compose trigger and its hover animation stay intact. */
+.sentinel-compose-indicator > .sentinel-compose-panel {
+  position: absolute !important;
+  right: 0 !important;
+  bottom: calc(100% + 6px) !important;
+  width: min(320px, 82vw) !important;
+  max-width: none !important;
+  cursor: default !important;
+}
+
+.sentinel-compose-panel[hidden] { display: none !important; }
+
+.sentinel-compose-indicator:has(.sentinel-compose-panel:not([hidden])) {
+  transform: none !important;
+}
+
+.sentinel-compose-panel .sentinel-gmail-audit-drawer {
+  display: flex !important;
+  flex-direction: column !important;
+  max-height: min(360px, 56vh) !important;
+  overflow: hidden !important;
+}
+
+.sentinel-compose-panel .sentinel-compose-choice {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 2px 0 !important;
+  font-size: 11px !important;
+  cursor: pointer !important;
+}
+
+.sentinel-compose-panel .sentinel-compose-choice input { margin: 0 !important; }
+
+.sentinel-compose-panel .sentinel-compose-findings,
+.sentinel-compose-panel .sentinel-compose-actions {
+  display: flex !important;
+  gap: 5px !important;
+  margin-top: 6px !important;
+}
+
+.sentinel-compose-panel .sentinel-compose-findings {
+  flex-direction: column !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+}
+
+.sentinel-compose-panel .sentinel-compose-findings > div,
+.sentinel-compose-panel .sentinel-compose-actions { flex-shrink: 0 !important; }
+.sentinel-compose-panel .sentinel-compose-actions { flex-wrap: wrap !important; }
+.sentinel-compose-panel button:disabled { opacity: .5 !important; cursor: default !important; }

@@ -1,3 +1,5 @@
+import { attachComposePrivacy } from "./composePrivacy";
+
 /**
  * Sentinel AI - Content Script (In-Page Email Guardian for Gmail)
  * Seamlessly integrates security badges, warning banners & privacy redactions directly into Gmail.
@@ -26,10 +28,6 @@
     });
   }
 
-  // Regex patterns from privacy_detector.py
-  const aadhaarRegex = /(?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d)/g;
-  const phoneRegex = /(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)/g;
-
   function getLogoSrc() {
     const filename = userTheme === "warm"
       ? "SentinelAILogoIcon-SentinelOnly(Orange).svg"
@@ -44,12 +42,12 @@
   /**
    * Scans an email message body with backend or client fallback
    */
-  async function analyzeEmail(text, sender) {
+  async function analyzeEmail(text, sender, subject, links) {
     try {
       const res = await fetch(`${BACKEND_URL}/api/scan-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, sender })
+        body: JSON.stringify({ text, sender, subject, links })
       });
       if (res.ok) {
         return await res.json();
@@ -58,39 +56,7 @@
       // Local fallback
     }
 
-    const textLower = text.toLowerCase();
-    const hasUrgency = /urgent|suspended|deactivated|password|verify|immediately|within \d+ hours/.test(textLower);
-    const aadhaarMatches = text.match(aadhaarRegex) || [];
-    const phoneMatches = text.match(phoneRegex) || [];
-
-    const markers = [];
-    if (hasUrgency) {
-      markers.push({
-        id: "urgency_trigger",
-        title: "High-Pressure Psychological Trigger",
-        description: "Message contains urgency keywords common in account-takeover scams.",
-        severity: "danger"
-      });
-    }
-    if (aadhaarMatches.length > 0) {
-      markers.push({
-        id: "aadhaar_present",
-        title: "Unredacted Aadhaar Number Detected",
-        description: `Exposes ${aadhaarMatches.length} Indian national ID number(s).`,
-        severity: "danger"
-      });
-    }
-
-    return {
-      risk_level: hasUrgency || aadhaarMatches.length > 0 ? "danger" : "safe",
-      safety_score: hasUrgency || aadhaarMatches.length > 0 ? 25.0 : 96.0,
-      markers: markers,
-      privacy: {
-        aadhaar_numbers: aadhaarMatches,
-        phone_numbers: phoneMatches
-      },
-      private_items_count: aadhaarMatches.length + phoneMatches.length
-    };
+    return { risk_level: "unknown", assessment: "Analysis unavailable", safety_score: null, markers: [] };
   }
 
   /**
@@ -116,8 +82,13 @@
       const sender = senderEl ? (senderEl.getAttribute('email') || senderEl.innerText) : "";
 
       // Analyze
-      const analysis = await analyzeEmail(text, sender);
-      const risk = analysis.risk_level || "safe";
+      const subject = (document.querySelector('h2.hP')?.textContent || '').slice(0, 500);
+      const links = [...bodyEl.querySelectorAll('a[href]')].slice(0, 40).map(link => ({
+        url: link.getAttribute('href'), label: link.textContent.slice(0, 200)
+      }));
+      const analysis = await analyzeEmail(text.slice(0, 20000), sender.slice(0, 500), subject, links);
+      const risk = ["safe", "suspicious", "danger"].includes(analysis.risk_level) ? analysis.risk_level : "unknown";
+      const score = Number.isFinite(analysis.safety_score) ? analysis.safety_score + "% Safe" : "Score unavailable";
       const isSafe = risk === "safe";
       const isSuspicious = risk === "suspicious";
 
@@ -136,7 +107,7 @@
           </div>
           <div class="sentinel-threat-content">
             <div class="sentinel-threat-heading">
-              <span>Sentinel AI Security Alert (${analysis.safety_score}% Safety Score)</span>
+              <span>Sentinel AI Security Alert (${score})</span>
             </div>
             <div class="sentinel-threat-details">${mainWarning}</div>
           </div>
@@ -148,10 +119,10 @@
       const barContainer = document.createElement('div');
       barContainer.className = `sentinel-gmail-bar-container theme-${userTheme}`;
 
-      const statusTitle = isSafe ? "Verified Safe" : isSuspicious ? "Security Caution" : "Threat Flagged";
+      const statusTitle = isSafe ? "No clear indicators" : isSuspicious ? "Security Caution" : risk === "danger" ? "Threat Flagged" : "No score";
       const statusSummary = isSafe
-        ? "No deceptive links, spoofed headers, or unredacted identity points detected in this message."
-        : (analysis.markers && analysis.markers[0] ? analysis.markers[0].description : "Potential social engineering or phishing markers detected.");
+        ? "Review unexpected requests independently. Privacy findings are shown separately."
+        : (analysis.markers && analysis.markers[0] ? analysis.markers[0].description : "A local assessment could not be completed.");
 
       let markersHtml = '';
       if (analysis.markers && analysis.markers.length > 0) {
@@ -179,7 +150,7 @@
             <span class="sentinel-bar-summary">${statusSummary}</span>
           </div>
           <div class="sentinel-bar-right">
-            <span class="sentinel-bar-score">${analysis.safety_score}% Safe</span>
+            <span class="sentinel-bar-score">${score}</span>
             <button class="sentinel-bar-toggle-btn" type="button">
               <span>Audit Details</span>
               <svg class="sentinel-chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12">
@@ -195,7 +166,7 @@
               <img src="${getLogoSrc()}" style="height:14px; width:auto;" />
               <span>Sentinel AI Security Audit</span>
             </div>
-            <span class="sentinel-audit-score">${analysis.safety_score}% Safe</span>
+            <span class="sentinel-audit-score">${score}</span>
           </div>
           <div class="sentinel-audit-markers-list">
             ${markersHtml}
@@ -244,64 +215,16 @@
   /**
    * Injects Privacy Guard into Gmail compose editors (Grammarly style)
    */
+  const attachedEditors = new WeakSet();
   function inspectGmailCompose() {
     if (!isEnabled) return;
 
-    const composeEditors = document.querySelectorAll('.Am.Al.editable, div[aria-label*="Message Body"]');
-    composeEditors.forEach((editor) => {
+    document.querySelectorAll('.Am.Al.editable, [contenteditable="true"][aria-label*="Message Body"]').forEach(editor => {
+      if (attachedEditors.has(editor) || editor.closest('.gmail_quote, blockquote')) return;
       const container = editor.closest('.M9') || editor.parentElement;
-      if (!container || container.hasAttribute('data-sentinel-compose-attached')) return;
-      container.setAttribute('data-sentinel-compose-attached', 'true');
-      container.style.position = 'relative';
-
-      const indicator = document.createElement('div');
-      indicator.className = `sentinel-compose-indicator theme-${userTheme}`;
-      indicator.title = "Sentinel AI Privacy Guard: Monitoring unredacted Aadhaar & Phone data";
-      indicator.innerHTML = `
-        <img src="${getLogoSrc()}" style="height:16px; width:auto;" />
-      `;
-
-      container.appendChild(indicator);
-
-      editor.addEventListener('input', () => {
-        const text = editor.innerText || editor.textContent || "";
-        const aadhaars = text.match(aadhaarRegex) || [];
-        const phones = text.match(phoneRegex) || [];
-        const count = aadhaars.length + phones.length;
-
-        let badgePill = indicator.querySelector('.sentinel-compose-badge-num');
-        if (count > 0) {
-          if (!badgePill) {
-            badgePill = document.createElement('span');
-            badgePill.className = 'sentinel-compose-badge-num';
-            indicator.appendChild(badgePill);
-          }
-          badgePill.innerText = count;
-        } else if (badgePill) {
-          badgePill.remove();
-        }
-      });
-
-      indicator.addEventListener('click', (e) => {
-        e.stopPropagation();
-        let text = editor.innerHTML;
-        const aadhaars = text.match(aadhaarRegex) || [];
-        const phones = text.match(phoneRegex) || [];
-
-        if (aadhaars.length === 0 && phones.length === 0) {
-          alert("Sentinel AI Privacy Guard: No unredacted Aadhaar or Phone numbers detected in this draft.");
-          return;
-        }
-
-        if (confirm(`Sentinel AI detected ${aadhaars.length} Aadhaar number(s) and ${phones.length} Phone number(s). Would you like to automatically redact them with [AADHAAR] and [PHONE] tags?`)) {
-          text = text.replace(aadhaarRegex, "[AADHAAR]");
-          text = text.replace(phoneRegex, "[PHONE]");
-          editor.innerHTML = text;
-
-          const badgePill = indicator.querySelector('.sentinel-compose-badge-num');
-          if (badgePill) badgePill.remove();
-        }
-      });
+      if (!container) return;
+      attachedEditors.add(editor);
+      attachComposePrivacy(editor, container, userTheme, getLogoSrc());
     });
   }
 

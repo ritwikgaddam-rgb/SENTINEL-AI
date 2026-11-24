@@ -10,28 +10,15 @@ function getRiskColor(level, theme, mode) {
   if (level === 'suspicious') {
     return theme === 'cold' && mode === 'dark' ? '#ffffff' : 'var(--color-warning)';
   }
-  return 'var(--color-safe)';
+  return level === 'safe' ? 'var(--color-safe)' : 'var(--text-secondary)';
 }
 
-// ─── Heuristic fallback (no backend) ────────────────────────────────────────
-function heuristicScan(text, sender) {
-  const textLower = text.toLowerCase();
-  const hasUrgency = /urgent|suspended|password|verify|immediately|within \d+ hours/.test(textLower);
-  const aadhaarMatches = text.match(/(?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d)/g) || [];
-  const phoneMatches   = text.match(/(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)/g)   || [];
-  const emailMatches   = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g) || [];
+function unavailableScan() {
+  return { risk_level: 'unknown', assessment: 'Analysis unavailable', safety_score: null, markers: [] };
+}
 
-  const markers = [];
-  if (hasUrgency) markers.push({ id: 'urgency', title: 'High-Pressure Psychological Trigger', description: 'Urgent phrasing designed to rush decision-making.', severity: 'high' });
-  if (aadhaarMatches.length) markers.push({ id: 'aadhaar', title: 'Aadhaar Number Found', description: `${aadhaarMatches.length} Indian national ID number(s) exposed.`, severity: 'danger' });
-
-  return {
-    risk_level: hasUrgency || aadhaarMatches.length ? 'danger' : 'safe',
-    safety_score: hasUrgency || aadhaarMatches.length ? 18 : 85,
-    markers,
-    privacy: { emails: emailMatches, phone_numbers: phoneMatches, aadhaar_numbers: aadhaarMatches },
-    private_items_count: aadhaarMatches.length + phoneMatches.length + emailMatches.length,
-  };
+function scoreLabel(result) {
+  return Number.isFinite(result.safety_score) ? result.safety_score + '% Safe' : 'Score unavailable';
 }
 
 // ─── Single email result card ────────────────────────────────────────────────
@@ -66,7 +53,7 @@ function InboxEmailRow({ email, onSelect, isSelected, theme, mode }) {
         )}
         {email.scanResult && (
           <span style={{ fontSize: '9px', fontWeight: 700, color: getRiskColor(email.scanResult.risk_level, theme, mode), flexShrink: 0 }}>
-            {email.scanResult.risk_level === 'danger' ? 'THREAT' : email.scanResult.risk_level === 'suspicious' ? 'CAUTION' : 'SAFE'}
+            {email.scanResult.risk_level === 'danger' ? 'THREAT' : email.scanResult.risk_level === 'suspicious' ? 'CAUTION' : email.scanResult.risk_level === 'safe' ? 'NO CLEAR FLAGS' : 'NO SCORE'}
           </span>
         )}
       </div>
@@ -87,6 +74,7 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
   const [sender, setSender]           = useState('');
   const [manualLoading, setManualLoading] = useState(false);
   const [manualResult, setManualResult]   = useState(null);
+  const [scannedText, setScannedText] = useState(null);
   const [copied, setCopied]           = useState(false);
 
   // Gmail inbox scanner state
@@ -105,22 +93,18 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
     setManualResult(null);
     try {
       const data = await scanEmailWithBackend(backendUrl, { body: emailText, sender });
+      setScannedText(emailText);
       setManualResult(data);
     } catch {
-      setManualResult(heuristicScan(emailText, sender));
+      setManualResult(unavailableScan());
     } finally {
       setManualLoading(false);
     }
   };
 
   const handleRedactAndCopy = async () => {
-    let cleaned = emailText;
-    if (manualResult?.privacy) {
-      for (const a of manualResult.privacy.aadhaar_numbers || []) cleaned = cleaned.replace(a, '[AADHAAR]');
-      for (const p of manualResult.privacy.phone_numbers  || []) cleaned = cleaned.replace(p, '[PHONE]');
-      for (const e of manualResult.privacy.emails         || []) cleaned = cleaned.replace(e, '[EMAIL]');
-    }
-    await navigator.clipboard.writeText(cleaned);
+    if (scannedText !== emailText || typeof manualResult?.redacted_text !== 'string') return;
+    await navigator.clipboard.writeText(manualResult.redacted_text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -147,7 +131,7 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
           const scan = await scanEmailWithBackend(backendUrl, annotated[i]);
           annotated[i] = { ...annotated[i], scanResult: scan };
         } catch {
-          annotated[i] = { ...annotated[i], scanResult: heuristicScan(annotated[i].body || annotated[i].snippet, annotated[i].sender) };
+          annotated[i] = { ...annotated[i], scanResult: unavailableScan() };
         }
         count++;
         setScannedCount(count);
@@ -176,7 +160,7 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
       const scan = await scanEmailWithBackend(backendUrl, email);
       setDetailResult(scan);
     } catch {
-      setDetailResult(heuristicScan(email.body || email.snippet, email.sender));
+      setDetailResult(unavailableScan());
     } finally {
       setDetailLoading(false);
     }
@@ -337,9 +321,9 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
                       <div className="status-info">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                           <span className={`status-badge ${detailResult.risk_level}`}>
-                            {detailResult.risk_level === 'danger' ? 'Phishing Threat' : detailResult.risk_level === 'suspicious' ? 'Suspicious' : 'Legitimate'}
+                            {detailResult.risk_level === 'danger' ? 'Phishing Threat' : detailResult.risk_level === 'suspicious' ? 'Suspicious' : detailResult.risk_level === 'safe' ? 'No clear indicators' : 'No score'}
                           </span>
-                          <span className="score-pill">{detailResult.safety_score}% Safe</span>
+                          <span className="score-pill">{scoreLabel(detailResult)}</span>
                         </div>
                         <h4 className="status-title">{selectedEmail.subject}</h4>
                         <p className="status-desc" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -385,11 +369,11 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
             <div className="status-info">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                 <span className={`status-badge ${manualResult.risk_level}`}>
-                  {manualResult.risk_level === 'danger' ? 'Phishing Threat' : manualResult.risk_level === 'suspicious' ? 'Suspicious Content' : 'Legitimate'}
+                  {manualResult.risk_level === 'danger' ? 'Phishing Threat' : manualResult.risk_level === 'suspicious' ? 'Suspicious Content' : manualResult.risk_level === 'safe' ? 'No clear indicators' : 'No score'}
                 </span>
-                <span className="score-pill">{manualResult.safety_score}% Safe</span>
+                <span className="score-pill">{scoreLabel(manualResult)}</span>
               </div>
-              <h4 className="status-title">{manualResult.risk_level === 'danger' ? 'High Risk Detected' : 'Content Appears Safe'}</h4>
+              <h4 className="status-title">{manualResult.assessment || 'Email assessment'}</h4>
               <p className="status-desc">
                 {manualResult.private_items_count > 0
                   ? `Identified ${manualResult.private_items_count} private identity data points.`
@@ -407,7 +391,7 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
                   </svg>
                   {manualResult.private_items_count} Sensitive Items Detected
                 </span>
-                <button className="btn-secondary" style={{ height: '28px', fontSize: '11px', padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: '4px' }} onClick={handleRedactAndCopy}>
+                <button className="btn-secondary" style={{ height: '28px', fontSize: '11px', padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: '4px' }} onClick={handleRedactAndCopy} disabled={scannedText !== emailText || typeof manualResult.redacted_text !== 'string'}>
                   {copied ? (
                     <>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" width="12" height="12"><polyline points="20 6 9 17 4 12" /></svg>

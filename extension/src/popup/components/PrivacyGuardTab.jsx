@@ -1,37 +1,51 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 export default function PrivacyGuardTab({ theme, mode, backendUrl }) {
   const [inputText, setInputText] = useState("");
   const [copied, setCopied] = useState(false);
 
-  // Live client-side regex matching using privacy_detector rules
-  const emailPattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
-  const phonePattern = /(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)/g;
-  const aadhaarPattern = /(?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d)/g;
+  const [analysis, setAnalysis] = useState(null);
+  const [failed, setFailed] = useState(null);
+  const report = analysis?.input === inputText && analysis.backend === backendUrl ? analysis.data : null;
+  const counts = report?.counts || {};
+  const totalDetected = report?.total_redacted ?? 0;
+  const categorySummary = [...new Set(report?.findings?.map(item => item.replacement) || [])].join(', ');
 
-  const emailsFound = inputText.match(emailPattern) || [];
-  const phonesFound = inputText.match(phonePattern) || [];
-  const aadhaarFound = inputText.match(aadhaarPattern) || [];
-
-  const totalDetected = emailsFound.length + phonesFound.length + aadhaarFound.length;
-
-  const getRedactedText = () => {
-    let text = inputText;
-    text = text.replace(emailPattern, "[EMAIL]");
-    text = text.replace(phonePattern, "[PHONE]");
-    text = text.replace(aadhaarPattern, "[AADHAAR]");
-    return text;
-  };
+  useEffect(() => {
+    if (!inputText.trim()) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(backendUrl + '/api/privacy-redact', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: inputText, preview: true }), signal: controller.signal
+        });
+        if (!response.ok) throw new Error('Local privacy analysis unavailable');
+        const data = await response.json();
+        if (!controller.signal.aborted) {
+          setAnalysis({ input: inputText, backend: backendUrl, data });
+          setFailed(null);
+        }
+      } catch {
+        if (!controller.signal.aborted) setFailed(inputText);
+      }
+    }, 220);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [inputText, backendUrl]);
 
   const handleCopyRedacted = async () => {
-    const redacted = getRedactedText();
-    await navigator.clipboard.writeText(redacted);
+    if (!report) return;
+    await navigator.clipboard.writeText(report.redacted_text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+    fetch(backendUrl + '/api/privacy-redact', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: inputText, context: 'clipboard' })
+    }).catch(() => {});
   };
 
   const loadSampleData = () => {
-    setInputText("Student profile: John Doe, Aadhaar: 9876 5432 1098, Phone: +91 9123456789, Personal Email: john.student@gmail.com. Please confirm receipt.");
+    setInputText("Student profile: John Doe, Aadhaar: 2345 6789 0124, Phone: +91 9123456789, Personal Email: student@example.org. Please confirm receipt.");
   };
 
   return (
@@ -40,22 +54,22 @@ export default function PrivacyGuardTab({ theme, mode, backendUrl }) {
       <div className="card-section">
         <div className="card-title">
           <span>Privacy Shield Active</span>
-          <span style={{ fontSize: '11px', color: 'var(--accent-color)', fontWeight: 600 }}>
+          <span title={categorySummary} style={{ fontSize: '11px', color: 'var(--accent-color)', fontWeight: 600 }}>
             {totalDetected} items detected
           </span>
         </div>
 
         <div className="privacy-counters">
           <div className="counter-box">
-            <div className="counter-num">{aadhaarFound.length}</div>
+            <div className="counter-num">{counts.aadhaar_numbers ?? 0}</div>
             <div className="counter-label">Aadhaar IDs</div>
           </div>
           <div className="counter-box">
-            <div className="counter-num">{phonesFound.length}</div>
+            <div className="counter-num">{counts.phone_numbers ?? 0}</div>
             <div className="counter-label">Phone #</div>
           </div>
           <div className="counter-box">
-            <div className="counter-num">{emailsFound.length}</div>
+            <div className="counter-num">{counts.emails ?? 0}</div>
             <div className="counter-label">Emails</div>
           </div>
         </div>
@@ -83,7 +97,7 @@ export default function PrivacyGuardTab({ theme, mode, backendUrl }) {
         <div className="input-group">
           <textarea
             className="textarea-clean"
-            placeholder="Type or paste text to test real-time Indian Aadhaar & Phone data masking..."
+            placeholder="Type or paste text to test real-time sensitive information masking..."
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             rows={3}
@@ -107,13 +121,14 @@ export default function PrivacyGuardTab({ theme, mode, backendUrl }) {
               maxHeight: '120px',
               overflowY: 'auto'
             }}>
-              {getRedactedText()}
+              {report?.redacted_text ?? (failed === inputText ? 'Local privacy analysis unavailable.' : 'Checking text…')}
             </div>
 
             <button
               className="btn-primary"
               style={{ width: '100%', marginTop: '10px' }}
               onClick={handleCopyRedacted}
+              disabled={!report}
             >
               {copied ? (
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>

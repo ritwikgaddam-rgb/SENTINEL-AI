@@ -101,15 +101,26 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-// Handle context menu clicks
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "sentinel_scan_selection" && info.selectionText) {
-    console.log("[Sentinel AI] Selected text for audit:", info.selectionText.substring(0, 50));
-  }
-});
-
 // Listen for messages from popup or content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "COMPOSE_PRIVACY") {
+    if (sender.id !== chrome.runtime.id || !sender.tab || !sender.url?.startsWith("https://mail.google.com/") ||
+        typeof message.text !== "string" || message.text.length > 40000) return false;
+    const preview = message.selected === undefined;
+    fetch(BACKEND_URL + "/api/privacy-redact", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: message.text, selected: message.selected, preview,
+        findings_only: preview, context: "gmail_compose" }),
+      signal: AbortSignal.timeout(5000)
+    }).then(response => {
+      if (!response.ok) throw new Error("Local privacy analysis unavailable");
+      return response.json();
+    }).then(data => sendResponse({ success: true, data: preview ? data : null }),
+      () => sendResponse({ success: false }));
+    return true;
+  }
+
   // Toolbar icon switching from the Settings popup
   if (message.type === "SET_TOOLBAR_ICON") {
     const variantId = message.variantId;

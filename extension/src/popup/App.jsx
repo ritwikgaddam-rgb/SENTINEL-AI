@@ -112,12 +112,8 @@ export default function App() {
     }
   };
   const scanUrlTarget = async (url) => {
-    if (!url || url.startsWith('chrome://') || url.startsWith('about:')) {
-      setScanResult({
-        risk_level: 'safe',
-        safety_score: 100,
-        markers: [{ id: 'internal_browser', title: 'Browser Internal Page', description: 'Standard secure internal browser page.', severity: 'safe' }]
-      });
+    if (!url || !/^https?:[/][/]/i.test(url)) {
+      setScanResult({ risk_level: 'unknown', assessment: 'No web address to assess', safety_score: null, markers: [] });
       setLoading(false);
       return;
     }
@@ -134,14 +130,7 @@ export default function App() {
       }
       throw new Error('Backend scan failed');
     } catch {
-      const isHttps = url.startsWith('https://');
-      setScanResult({
-        risk_level: isHttps ? 'safe' : 'danger',
-        safety_score: isHttps ? 85 : 30,
-        markers: isHttps
-          ? [{ id: 'verified_https', title: 'TLS/HTTPS Secure Connection', description: 'Encrypted channel active.', severity: 'safe' }]
-          : [{ id: 'insecure_http', title: 'Unencrypted HTTP', description: 'Data transmitted without encryption.', severity: 'danger' }]
-      });
+      setScanResult({ risk_level: 'unknown', assessment: 'Analysis unavailable', safety_score: null, markers: [] });
     } finally {
       setLoading(false);
     }
