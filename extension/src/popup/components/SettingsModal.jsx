@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 
 // Icon variants for toolbar icon picker
 const ICON_VARIANTS = [
-  { id: 'purple_minimal', label: 'Cold', desc: 'Minimal compact', preview: 'logos/purple_minimal_48.png', paths: { 16: 'logos/purple_minimal_16.png', 32: 'logos/purple_minimal_32.png', 48: 'logos/purple_minimal_48.png', 128: 'logos/purple_minimal_128.png' } },
-  { id: 'orange_minimal', label: 'Warm', desc: 'Minimal compact', preview: 'logos/orange_minimal_48.png', paths: { 16: 'logos/orange_minimal_16.png', 32: 'logos/orange_minimal_32.png', 48: 'logos/orange_minimal_48.png', 128: 'logos/orange_minimal_128.png' } },
-  { id: 'purple_emblem', label: 'Cold Emblem', desc: 'No background', preview: 'logos/purple_emblem_48.png', transparent: true, paths: { 16: 'logos/purple_emblem_16.png', 32: 'logos/purple_emblem_32.png', 48: 'logos/purple_emblem_48.png', 128: 'logos/purple_emblem_128.png' } },
-  { id: 'orange_emblem', label: 'Warm Emblem', desc: 'No background', preview: 'logos/orange_emblem_48.png', transparent: true, paths: { 16: 'logos/orange_emblem_16.png', 32: 'logos/orange_emblem_32.png', 48: 'logos/orange_emblem_48.png', 128: 'logos/orange_emblem_128.png' } },
+  { id: 'purple_minimal', label: 'Cold', desc: 'Sentinel', preview: 'logos/purple_minimal_48.png' },
+  { id: 'orange_minimal', label: 'Warm', desc: 'Sentinel', preview: 'logos/orange_minimal_48.png' },
+  { id: 'purple_emblem', label: 'Cold Emblem', desc: 'Shield', preview: 'logos/purple_emblem_48.png', transparent: true },
+  { id: 'orange_emblem', label: 'Warm Emblem', desc: 'Shield', preview: 'logos/orange_emblem_48.png', transparent: true },
 ];
 
 export default function SettingsModal({
@@ -28,6 +28,7 @@ export default function SettingsModal({
     () => localStorage.getItem('sentinel_toolbar_icon') || 'purple_minimal'
   );
   const [iconApplied, setIconApplied]   = useState(false);
+  const [iconError, setIconError]       = useState(null);
 
   if (!isOpen) return null;
 
@@ -56,14 +57,25 @@ export default function SettingsModal({
   const applyToolbarIcon = (variantId) => {
     const variant = ICON_VARIANTS.find(v => v.id === variantId);
     if (!variant) return;
-    setSelectedIcon(variantId);
-    localStorage.setItem('sentinel_toolbar_icon', variantId);
-    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      chrome.runtime.sendMessage({ type: 'SET_TOOLBAR_ICON', paths: variant.paths }, () => {
-        setIconApplied(true);
-        setTimeout(() => setIconApplied(false), 2000);
-      });
+    setIconError(null);
+    setIconApplied(false);
+    if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {
+      setIconError('Chrome extension API is unavailable.');
+      return;
     }
+
+    chrome.runtime.sendMessage({ type: 'SET_TOOLBAR_ICON', variantId }, (response) => {
+      const error = chrome.runtime.lastError?.message || response?.error;
+      if (error || !response?.success) {
+        setIconError(error || 'Could not save the toolbar icon.');
+        return;
+      }
+
+      setSelectedIcon(variantId);
+      localStorage.setItem('sentinel_toolbar_icon', variantId);
+      setIconApplied(true);
+      setTimeout(() => setIconApplied(false), 2000);
+    });
   };
 
   return (
@@ -245,6 +257,11 @@ export default function SettingsModal({
                 );
               })}
             </div>
+            {iconError && (
+              <div role="alert" style={{ color: 'var(--color-danger)', fontSize: '10.5px', marginTop: '8px' }}>
+                {iconError}
+              </div>
+            )}
           </div>
 
           {/* ── Feature Toggles ───────────────────────────────────────────── */}

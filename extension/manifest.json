@@ -15,10 +15,10 @@
     }
   },
   "icons": {
-    "16": "logos/purple_minimal_16.png",
-    "32": "logos/purple_minimal_32.png",
-    "48": "logos/purple_minimal_48.png",
-    "128": "logos/purple_minimal_128.png"
+    "16": "logos/purple_emblem_16.png",
+    "32": "logos/purple_emblem_32.png",
+    "48": "logos/purple_emblem_48.png",
+    "128": "logos/purple_emblem_128.png"
   },
   "background": {
     "service_worker": "background.js"

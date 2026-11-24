@@ -108,6 +108,18 @@
   cursor: pointer !important;
   width: 100% !important;
   user-select: none !important;
+  position: relative !important;
+}
+
+.sentinel-gmail-bar::before {
+  content: "" !important;
+  position: absolute !important;
+  left: 1px !important;
+  top: 4px !important;
+  bottom: 4px !important;
+  width: 5px !important;
+  border-radius: 4px !important;
+  pointer-events: none !important;
 }
 
 .sentinel-gmail-bar:hover {
@@ -129,15 +141,15 @@
   border: 1px solid rgba(255, 120, 88, 0.35) !important;
 }
 
-/* Risk Left Accents */
-.sentinel-gmail-bar.safe {
-  border-left: 4px solid #10b981 !important;
+/* Risk Status Strip */
+.sentinel-gmail-bar.safe::before {
+  background: #10b981 !important;
 }
-.sentinel-gmail-bar.suspicious {
-  border-left: 4px solid #f59e0b !important;
+.sentinel-gmail-bar.suspicious::before {
+  background: #ffffff !important;
 }
-.sentinel-gmail-bar.danger {
-  border-left: 4px solid #ef4444 !important;
+.sentinel-gmail-bar.danger::before {
+  background: #ef4444 !important;
 }
 
 /* Bar Sub-elements */
@@ -339,8 +351,8 @@
    ============================================================================= */
 .sentinel-compose-indicator {
   position: absolute !important;
-  bottom: 12px !important;
-  right: 18px !important;
+  bottom: 16px !important;
+  right: 38px !important;
   width: 30px !important;
   height: 30px !important;
   border-radius: 50% !important;

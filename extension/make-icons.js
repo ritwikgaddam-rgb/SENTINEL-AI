@@ -1,17 +1,21 @@
 const sharp = require("sharp");
 
 const logos = [
-    ["public/logos/SentinelAILogoIconOnlySentinel(Purple).svg", "purple_minimal"],
-    ["public/logos/SentinelAILogoIcon-SentinelOnly(Orange).svg", "orange_minimal"],
-    ["public/logos/SentinelAILogoIcon(Purple).svg", "purple_emblem"],
-    ["public/logos/SentinelAILogoIcon(Orange).svg", "orange_emblem"]
+    { src: "public/logos/SentinelAILogoIconOnlySentinel(Purple).svg", prefix: "purple_minimal", density: 300 },
+    { src: "public/logos/SentinelAILogoIcon-SentinelOnly(Orange).svg", prefix: "orange_minimal", density: 300 },
+    { src: "public/logos/SentinelAILogoIcon(Purple).svg", prefix: "purple_emblem", density: 96 },
+    { src: "public/logos/SentinelAILogoIcon(Orange).svg", prefix: "orange_emblem", density: 96 }
 ];
 
 (async () => {
-    for (const [src, prefix] of logos) {
+    for (const { src, prefix, density } of logos) {
+        const image = await sharp(src, { density })
+            .trim()
+            .png()
+            .toBuffer();
+
         for (const size of [16, 32, 48, 128]) {
-            await sharp(src, { density: 300 })
-                .trim()
+            await sharp(image)
                 .resize(size, size, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
                 .png()
                 .toFile(`public/logos/${prefix}_${size}.png`);

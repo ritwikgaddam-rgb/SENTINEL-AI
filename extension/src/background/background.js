@@ -5,13 +5,6 @@
 
 const BACKEND_URL = "http://127.0.0.1:8000";
 
-// Restore saved toolbar icon on every service-worker startup
-chrome.storage.local.get(["sentinel_toolbar_icon"], (result) => {
-  if (result.sentinel_toolbar_icon) {
-    applyIcon(result.sentinel_toolbar_icon);
-  }
-});
-
 // Icon variant path maps
 const ICON_PATHS = {
   purple_shield: {
@@ -54,13 +47,30 @@ const ICON_PATHS = {
 
 function applyIcon(variantId) {
   const paths = ICON_PATHS[variantId];
-  if (!paths) return;
+  if (!paths) {
+    console.warn("[Sentinel AI] Unknown toolbar icon variant:", variantId);
+    return;
+  }
   chrome.action.setIcon({ path: paths }, () => {
     if (chrome.runtime.lastError) {
       console.warn("[Sentinel AI] setIcon error:", chrome.runtime.lastError.message);
     }
   });
 }
+
+function restoreSavedIcon() {
+  chrome.storage.local.get(["sentinel_toolbar_icon"], (result) => {
+    if (chrome.runtime.lastError) {
+      console.error("[Sentinel AI] Failed to restore toolbar icon:", chrome.runtime.lastError.message);
+      return;
+    }
+    if (result.sentinel_toolbar_icon) {
+      applyIcon(result.sentinel_toolbar_icon);
+    }
+  });
+}
+
+chrome.runtime.onStartup.addListener(restoreSavedIcon);
 
 // Initialize default settings on install
 chrome.runtime.onInstalled.addListener(() => {
@@ -102,19 +112,27 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Toolbar icon switching from the Settings popup
   if (message.type === "SET_TOOLBAR_ICON") {
-    const variantId = Object.keys(ICON_PATHS).find(k =>
-      JSON.stringify(ICON_PATHS[k]) === JSON.stringify(message.paths)
-    ) || Object.keys(ICON_PATHS)[0];
+    const variantId = message.variantId;
+    const paths = ICON_PATHS[variantId];
+    if (!paths) {
+      sendResponse({ success: false, error: "Unknown toolbar icon variant." });
+      return false;
+    }
 
     // Apply via chrome.action.setIcon (MV3)
-    chrome.action.setIcon({ path: message.paths }, () => {
+    chrome.action.setIcon({ path: paths }, () => {
       if (chrome.runtime.lastError) {
         sendResponse({ success: false, error: chrome.runtime.lastError.message });
-      } else {
-        // Persist so icon survives service worker restarts
-        chrome.storage.local.set({ sentinel_toolbar_icon: variantId });
-        sendResponse({ success: true });
+        return;
       }
+
+      chrome.storage.local.set({ sentinel_toolbar_icon: variantId }, () => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        sendResponse({ success: true });
+      });
     });
     return true; // keep sendResponse alive for async
   }
