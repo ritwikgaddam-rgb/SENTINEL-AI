@@ -5,6 +5,9 @@ import EmailScannerTab from './components/EmailScannerTab';
 import PrivacyGuardTab from './components/PrivacyGuardTab';
 import SettingsModal from './components/SettingsModal';
 import HistoryModal from './components/HistoryModal';
+import PageGuard from './components/PageGuard';
+import ThreatReview from './components/ThreatReview';
+import { localApi } from './localApi';
 import { getToken, getTokenSilent, revokeToken, fetchUserProfile } from './gmailApi';
 import '../theme.css';
 import './Popup.css';
@@ -26,7 +29,8 @@ const TABS = [
       <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
       <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
     </svg>
-  )}
+  )},
+  { id: 'threats', label: 'Review' }
 ];
 
 export default function App() {
@@ -91,7 +95,7 @@ export default function App() {
 
   const checkBackendHealth = async () => {
     try {
-      const res = await fetch(`${backendUrl}/api/health`);
+      const res = await localApi(backendUrl, "/api/health");
       setBackendOnline(res.ok);
     } catch {
       setBackendOnline(false);
@@ -101,47 +105,39 @@ export default function App() {
   const fetchActiveTabUrl = () => {
     if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        const url = tabs?.[0]?.url || 'https://mail.google.com';
+        const url = tabs?.[0]?.url || '';
         setCurrentUrl(url);
         scanUrlTarget(url);
       });
-    } else {
-      const url = 'https://mail.google.com';
-      setCurrentUrl(url);
-      scanUrlTarget(url);
     }
   };
-  const scanUrlTarget = async (url) => {
-    if (!url || url.startsWith('chrome://') || url.startsWith('about:')) {
-      setScanResult({
-        risk_level: 'safe',
-        safety_score: 100,
-        markers: [{ id: 'internal_browser', title: 'Browser Internal Page', description: 'Standard secure internal browser page.', severity: 'safe' }]
-      });
+  const scanUrlTarget = async (url, collectSample = false) => {
+    if (!/^https?:\/\//i.test(url || '')) {
+      setScanResult({ assessment: 'Analysis unavailable', risk_level: 'uncertain',
+        explanation: 'Open an HTTP or HTTPS page to check its address.', markers: [] });
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const res = await fetch(`${backendUrl}/api/scan-url`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url })
-      });
-      if (res.ok) {
-        setScanResult(await res.json());
-        return;
+      const address = new URL(url);
+      const parameterTypes = new URLSearchParams();
+      for (const name of address.searchParams.keys()) {
+        if (['redirect', 'redirect_uri', 'return_url', 'returnto', 'continue', 'target', 'dest', 'url'].includes(name.toLowerCase())) {
+          parameterTypes.set(name.toLowerCase(), '');
+        }
       }
-      throw new Error('Backend scan failed');
-    } catch {
-      const isHttps = url.startsWith('https://');
-      setScanResult({
-        risk_level: isHttps ? 'safe' : 'danger',
-        safety_score: isHttps ? 85 : 30,
-        markers: isHttps
-          ? [{ id: 'verified_https', title: 'TLS/HTTPS Secure Connection', description: 'Encrypted channel active.', severity: 'safe' }]
-          : [{ id: 'insecure_http', title: 'Unencrypted HTTP', description: 'Data transmitted without encryption.', severity: 'danger' }]
+      const query = parameterTypes.size ? '?' + parameterTypes : '';
+      const response = await localApi(backendUrl, '/api/scan-url', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: address.origin + address.pathname + query,
+          collect_sample: collectSample === true })
       });
+      if (!response.ok) throw new Error('Local scan failed');
+      setScanResult(await response.json());
+    } catch {
+      setScanResult({ assessment: 'Analysis unavailable', risk_level: 'uncertain',
+        explanation: 'Start the local backend to check this address.', markers: [] });
     } finally {
       setLoading(false);
     }
@@ -156,7 +152,6 @@ export default function App() {
   const tryRestoreSession = async () => {
     if (googleUser) {
       // User was previously signed in — try to silently get a fresh token
-      const { getTokenSilent } = await import('./gmailApi');
       const tok = await getTokenSilent();
       if (tok) {
         setAccessToken(tok);
@@ -239,16 +234,21 @@ export default function App() {
 
       <main className="content-area">
         <div key={activeTab} className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {activeTab === 'overview' && (
+          {activeTab === 'overview' && (<>
             <ShieldStatus
               currentUrl={currentUrl}
               scanResult={scanResult}
               loading={loading}
               theme={theme}
               mode={mode}
-              onRescan={() => scanUrlTarget(currentUrl)}
+              onRescan={(url, collect) => {
+                setCurrentUrl(url);
+                scanUrlTarget(url, collect);
+              }}
             />
-          )}
+            <PageGuard backendUrl={backendUrl} />
+          </>)}
+          {activeTab === 'threats' && <ThreatReview backendUrl={backendUrl} />}
           {activeTab === 'email' && (
             <EmailScannerTab
               theme={theme}

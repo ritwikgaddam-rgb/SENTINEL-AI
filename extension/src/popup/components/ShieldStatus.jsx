@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import MarkersCard from './MarkersCard';
 
 export default function ShieldStatus({
@@ -26,8 +26,11 @@ export default function ShieldStatus({
     }
   }
 
-  const riskLevel = scanResult?.risk_level || "safe";
-  const safetyScore = scanResult?.safety_score ?? 98;
+  const riskLevel = scanResult?.risk_level === 'suspicious' ? 'suspicious' : 'uncertain';
+  const [address, setAddress] = useState('');
+  const [collectSample, setCollectSample] = useState(false);
+  let host = 'Active tab';
+  try { host = new URL(currentUrl).hostname || host; } catch { /* A tab may have no accessible URL. */ }
   const markers = scanResult?.markers || [];
 
   return (
@@ -45,38 +48,34 @@ export default function ShieldStatus({
         <div className="status-info">
           <div className="status-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2px' }}>
             <span className={`status-badge ${riskLevel}`}>
-              {riskLevel === 'safe' ? 'Verified Safe' : riskLevel === 'suspicious' ? 'Caution Advised' : 'Phishing Threat'}
-            </span>
-            <span className="score-pill" title="Sentinel AI Confidence Safety Score">
-              {safetyScore}% Safe
+              {loading ? 'Checking address…' : scanResult?.assessment || 'Ready to check address'}
             </span>
           </div>
-
-          <h3 className="status-title" title={currentUrl || "Active Tab"}>
-            {currentUrl ? new URL(currentUrl).hostname || currentUrl : "Browser Protected"}
-          </h3>
-          <p className="status-desc">
-            {riskLevel === 'safe'
-              ? 'No phishing markers or identity data leaks detected.'
-              : riskLevel === 'suspicious'
-              ? 'Anomalies detected in page structure or domain.'
-              : 'Malicious destination or high-risk domain detected.'}
+          <h3 className="status-title">{host}</h3>
+          <p className="status-desc">{scanResult?.explanation || 'Check the address structure.'}
           </p>
         </div>
       </div>
 
       {/* Quick Action Bar */}
       <div style={{ display: 'flex', gap: '8px' }}>
+        <input className="input-clean" aria-label="Website address" placeholder={host === 'Active tab' ? 'https://example.org' : host}
+          value={address} onChange={event => setAddress(event.target.value)} maxLength={2083} />
         <button
           className="btn-primary"
           style={{ flex: 1 }}
-          onClick={onRescan}
-          disabled={loading}
+          onClick={() => onRescan(address.trim() || currentUrl, collectSample)}
+          disabled={loading || !(address.trim() || currentUrl)}
         >
-          {loading ? 'Scanning Destination...' : 'Scan Active Page'}
+          {loading ? 'Scanning Destination...' : 'Scan active address'}
         </button>
       </div>
 
+      <label><input type="checkbox" checked={collectSample} onChange={event => setCollectSample(event.target.checked)} /> Save derived features from the next address scan</label>
+      {scanResult?.sample_id && <p role="status">Features saved for review.</p>}
+      {scanResult?.model_observation && <details className="card-section"><summary>Experimental structure model</summary>
+        <p>{scanResult.model_observation.message} This observation does not determine the assessment.</p>
+      </details>}
       {/* Threat Markers */}
       <MarkersCard
         markers={markers}

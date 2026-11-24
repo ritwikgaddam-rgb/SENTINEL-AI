@@ -4,6 +4,8 @@
  * Authentication uses chrome.identity.getAuthToken (native Google OAuth).
  */
 
+import { requestLocal } from './localApi';
+
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const PEOPLE_BASE = 'https://people.googleapis.com/v1/people/me';
 
@@ -85,7 +87,7 @@ function decodeBody(encoded) {
 }
 
 function extractPlainText(part) {
-  if (!part) return '';
+  if (!part || part.filename || part.body?.attachmentId) return '';
   if (part.mimeType === 'text/plain' && part.body?.data) {
     return decodeBody(part.body.data);
   }
@@ -99,16 +101,9 @@ function extractPlainText(part) {
 }
 
 function extractHtmlText(part) {
-  if (!part) return '';
+  if (!part || part.filename || part.body?.attachmentId) return '';
   if (part.mimeType === 'text/html' && part.body?.data) {
-    const html = decodeBody(part.body.data);
-    return html
-      .replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi, '$2 ($1)')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    return decodeBody(part.body.data);
   }
   if (part.parts) {
     for (const child of part.parts) {
@@ -154,7 +149,8 @@ export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbo
     .map(r => {
       const msg = r.value;
       const headers = msg.payload?.headers ?? [];
-      const body = extractPlainText(msg.payload) || extractHtmlText(msg.payload) || msg.snippet || '';
+      const html = extractHtmlText(msg.payload).slice(0, 100000);
+      const body = extractPlainText(msg.payload) || (html ? '' : msg.snippet || '');
       return {
         id: msg.id,
         threadId: msg.threadId,
@@ -162,19 +158,19 @@ export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbo
         sender: getHeader(headers, 'from') || 'Unknown Sender',
         date: getHeader(headers, 'date') || '',
         snippet: msg.snippet || '',
-        body,
+        body, html,
+        replyTo: getHeader(headers, 'reply-to'),
         labelIds: msg.labelIds ?? [],
         isUnread: (msg.labelIds ?? []).includes('UNREAD')
       };
     });
 }
 
-export async function scanEmailWithBackend(backendUrl, emailObj) {
-  const res = await fetch(`${backendUrl}/api/scan-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: emailObj.body || emailObj.snippet, sender: emailObj.sender })
+export function scanEmailWithBackend(backendUrl, emailObj) {
+  return requestLocal(backendUrl, '/api/scan-email', {
+    text: (emailObj.body || (emailObj.html ? '' : emailObj.snippet) || '').slice(0, 20000),
+    sender: (emailObj.sender || '').slice(0, 500), subject: (emailObj.subject || '').slice(0, 500),
+    html: emailObj.html || '', reply_to: (emailObj.replyTo || '').slice(0, 500),
+    labels: emailObj.labelIds || [], collect_sample: emailObj.collectSample === true,
   });
-  if (!res.ok) throw new Error('Backend scan failed');
-  return res.json();
 }

@@ -1,3 +1,4 @@
+import { localApi } from '../localApi';
 import React, { useState, useEffect } from 'react';
 
 // Icon variants for toolbar icon picker
@@ -38,7 +39,7 @@ export default function SettingsModal({
     setPingResult(null);
     const start = performance.now();
     try {
-      const res = await fetch(`${backendUrl}/api/health`);
+      const res = await localApi(backendUrl, "/api/health");
       const latency = Math.round(performance.now() - start);
       if (res.ok) {
         setPingResult({ success: true, latency });

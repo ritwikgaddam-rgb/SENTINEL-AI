@@ -1,3 +1,4 @@
+import { localApi } from '../localApi';
 import React, { useEffect, useState } from 'react';
 
 export default function HistoryModal({ isOpen, onClose, backendUrl, backendOnline }) {
@@ -15,7 +16,7 @@ export default function HistoryModal({ isOpen, onClose, backendUrl, backendOnlin
     setLoading(true);
     setFetchError(false);
     try {
-      const res = await fetch(`${backendUrl}/api/history`);
+      const res = await localApi(backendUrl, "/api/history");
       if (res.ok) {
         const data = await res.json();
         setHistory(data.history || []);
@@ -114,7 +115,7 @@ export default function HistoryModal({ isOpen, onClose, backendUrl, backendOnlin
                 {item.target_preview}
               </div>
               <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>
-                {new Date(item.created_at).toLocaleString()} • Risk Score: {item.confidence}%
+                {new Date(item.created_at).toLocaleString()}{item.legacy ? ' · Legacy assessment' : ''}
               </div>
             </div>
           ))}
