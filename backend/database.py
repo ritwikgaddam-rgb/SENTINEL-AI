@@ -6,32 +6,41 @@ Stores threat detections, scan history, privacy audits, and user preferences.
 import sqlite3
 import os
 import json
+import re
 from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sentinel_ai.db")
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(os.getenv("SENTINELAI_DB_PATH", DB_PATH), timeout=5)
     conn.row_factory = sqlite3.Row
     return conn
+
+SCAN_SCHEMA = """
+CREATE TABLE IF NOT EXISTS scan_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_type TEXT NOT NULL,
+    target_preview TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    confidence REAL,
+    markers_json TEXT,
+    metadata_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Table for URL and Email scan history
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS scan_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        scan_type TEXT NOT NULL,           -- 'url' or 'email'
-        target_preview TEXT NOT NULL,      -- truncated URL or subject/text
-        risk_level TEXT NOT NULL,          -- 'safe', 'suspicious', 'danger'
-        confidence REAL NOT NULL,          -- 0.0 to 1.0 (phishing probability or safety score)
-        markers_json TEXT,                 -- list of explanation markers
-        metadata_json TEXT,                -- extra details (features, detected items)
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
+    cursor.execute("BEGIN IMMEDIATE")
+    cursor.execute(SCAN_SCHEMA)
+    if any(column["name"] == "confidence" and column["notnull"] for column in cursor.execute("PRAGMA table_info(scan_history)")):
+        cursor.execute("ALTER TABLE scan_history RENAME TO scan_history_legacy")
+        cursor.execute(SCAN_SCHEMA)
+        cursor.execute("INSERT INTO scan_history SELECT * FROM scan_history_legacy")
+        cursor.execute("DROP TABLE scan_history_legacy")
 
     # Table for Privacy Guard audits
     cursor.execute("""
@@ -86,11 +95,11 @@ def log_scan(scan_type, target_preview, risk_level, confidence, markers, metadat
         VALUES (?, ?, ?, ?, ?, ?)
     """, (
         scan_type,
-        target_preview[:250],
+        f"{scan_type.capitalize()} assessment",
         risk_level,
         confidence,
-        json.dumps(markers or []),
-        json.dumps(metadata or {})
+        json.dumps([m["id"] for m in markers or [] if re.fullmatch(r"[a-z_]{1,50}", m.get("id", ""))]),
+        "{}"
     ))
     scan_id = cursor.lastrowid
     conn.commit()
@@ -107,31 +116,35 @@ def log_privacy_audit(context, detected_counts, redacted_count, original_sample=
         context,
         json.dumps(detected_counts),
         redacted_count,
-        original_sample[:300]
+        ""
     ))
     audit_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return audit_id
 
-def get_recent_history(limit=20):
+def get_recent_history(limit=20, offset=0, kind=None):
+    if kind not in (None, "email", "url", "webpage"):
+        raise ValueError("Unknown history type.")
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, scan_type, target_preview, risk_level, confidence, markers_json, created_at
         FROM scan_history
-        ORDER BY id DESC LIMIT ?
-    """, (limit,))
+        WHERE (? IS NULL OR scan_type = ?)
+        ORDER BY id DESC LIMIT ? OFFSET ?
+    """, (kind, kind, limit, offset))
     rows = cursor.fetchall()
     history = []
     for r in rows:
         history.append({
             "id": r["id"],
             "scan_type": r["scan_type"],
-            "target_preview": r["target_preview"],
+            "target_preview": f"{r['scan_type'].capitalize()} assessment",
             "risk_level": r["risk_level"],
-            "confidence": r["confidence"],
-            "markers": json.loads(r["markers_json"] or "[]"),
+            "confidence": None,
+            "legacy": r["confidence"] is not None,
+            "markers": [],
             "created_at": r["created_at"]
         })
     conn.close()

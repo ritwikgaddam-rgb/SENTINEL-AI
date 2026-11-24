@@ -8,10 +8,12 @@ Runs natively using Python standard library (no external server framework requir
 import sys
 import os
 import json
-import re
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import base64
+import hashlib
+from html import escape
+from pathlib import Path
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlsplit, parse_qs
-import ipaddress
 
 # Ensure current and parent directory is in python path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,387 +22,292 @@ sys.path.insert(0, CURRENT_DIR)
 sys.path.insert(0, PARENT_DIR)
 
 from database import init_db, log_scan, log_privacy_audit, get_recent_history, get_stats, get_all_settings, update_setting
-from markers import analyze_url_markers, analyze_email_markers
+from assessments import destination, email_evidence, split_url, url_evidence, webpage_evidence
 import privacy_detector
-
-# Try loading ML models if joblib is available
-url_model = None
-url_features_cols = None
-email_model = None
-
-try:
-    import joblib
-    model_path_url = os.path.join(PARENT_DIR, "models", "url_phishing_model_v2.joblib")
-    features_path_url = os.path.join(PARENT_DIR, "models", "url_features_v2.joblib")
-    email_model_path = os.path.join(PARENT_DIR, "models", "email_phishing_model.joblib")
-
-    if os.path.exists(model_path_url) and os.path.exists(features_path_url):
-        url_model = joblib.load(model_path_url)
-        url_features_cols = joblib.load(features_path_url)
-        print("[Sentinel AI Backend] Loaded URL ML Model v2 successfully.")
-
-    if os.path.exists(email_model_path):
-        email_model = joblib.load(email_model_path)
-        print("[Sentinel AI Backend] Loaded Email ML Model successfully.")
-except Exception as e:
-    print(f"[Sentinel AI Backend] ML models in passive mode ({e}). Using expert heuristic engine.")
+import threats
+from url_advisory import candidate, extract_features_dict, url_model_observations
 
 
-def extract_features_dict(url: str) -> dict:
-    """Extracts URL numerical and structural features without hard dependency on pandas."""
-    url = url.strip()
-    if not (url.startswith("http://") or url.startswith("https://")):
-        url = "https://" + url
-
-    parsed = urlsplit(url)
-    domain = parsed.hostname or ""
-
-    is_ip = 0
-    try:
-        ipaddress.ip_address(domain)
-        is_ip = 1
-    except ValueError:
-        pass
-
-    letters = sum(1 for c in url if c.isalpha())
-    digits = sum(1 for c in url if c.isdigit())
-    subdomains = max(0, len(domain.split(".")) - 2)
-    is_https = 1 if parsed.scheme == "https" else 0
-
-    return {
-        "URLLength": len(url),
-        "DomainLength": len(domain),
-        "IsDomainIP": is_ip,
-        "NoOfSubDomain": subdomains,
-        "NoOfLettersInURL": letters,
-        "NoOfDegitsInURL": digits,
-        "NoOfQMarkInURL": url.count("?"),
-        "NoOfAmpersandInURL": url.count("&"),
-        "IsHTTPS": is_https
-    }
+MAX_REQUEST = 512 * 1024
+EXTENSION_KEY = json.loads((Path(PARENT_DIR) / "extension/manifest.json").read_text())["key"]
+EXTENSION_ID = hashlib.sha256(base64.b64decode(EXTENSION_KEY)).hexdigest()[:32].translate(
+    str.maketrans("0123456789abcdef", "abcdefghijklmnop")
+)
+APP_ORIGINS = {f"chrome-extension://{EXTENSION_ID}", "http://127.0.0.1:5173", "http://localhost:5173",
+               "http://127.0.0.1:4173", "http://localhost:4173"}
+ALLOWED_ORIGINS = APP_ORIGINS | {"https://mail.google.com"}
 
 
-def predict_url_risk(url: str):
-    """Computes URL risk score (0-100), risk level, and markers."""
-    features = extract_features_dict(url)
-    markers = analyze_url_markers(url, features)
-
-    # Calculate heuristic score based on features and markers
-    risk_score = 5.0 # baseline low risk
-
-    # Danger markers
-    danger_count = sum(1 for m in markers if m.get("severity") in ["danger", "high"])
-    medium_count = sum(1 for m in markers if m.get("severity") == "medium")
-
-    if features["IsDomainIP"] == 1:
-        risk_score += 60.0
-    if features["IsHTTPS"] == 0:
-        risk_score += 25.0
-    if features["NoOfSubDomain"] >= 3:
-        risk_score += 20.0
-    if features["URLLength"] > 100:
-        risk_score += 15.0
-
-    risk_score += danger_count * 25.0 + medium_count * 10.0
-    risk_score = min(99.0, max(2.0, risk_score))
-
-    # Try ML model if loaded
-    ml_confidence = None
-    if url_model is not None and url_features_cols is not None:
-        try:
-            import pandas as pd
-            df_feat = pd.DataFrame([features])[url_features_cols]
-            pred = url_model.predict(df_feat)[0]
-            proba = url_model.predict_proba(df_feat)[0]
-            # In training: 0 = phishing, 1 = legitimate
-            phish_idx = list(url_model.classes_).index(0)
-            ml_phish_prob = float(proba[phish_idx])
-            ml_confidence = round(ml_phish_prob * 100, 1)
-            # Combine ML confidence and heuristic markers
-            risk_score = round(0.6 * ml_confidence + 0.4 * risk_score, 1)
-        except Exception as err:
-            pass
-
-    risk_score = round(risk_score, 1)
-    if risk_score >= 65.0:
-        risk_level = "danger"
-    elif risk_score >= 35.0:
-        risk_level = "suspicious"
-    else:
-        risk_level = "safe"
-
-    return {
-        "url": url,
-        "risk_score": risk_score,
-        "safety_score": round(100.0 - risk_score, 1),
-        "risk_level": risk_level,
-        "markers": markers,
-        "features": features,
-        "ml_evaluated": url_model is not None
-    }
+def predict_url_risk(url):
+    result = url_evidence(url)
+    result["features"] = extract_features_dict(url)
+    result["model_observation"] = url_model_observations([url])[0]
+    result["ml_evaluated"] = result["model_observation"]["status"] != "unavailable"
+    return result
 
 
-def predict_email_risk(text: str, sender: str = "", links: list = None):
-    """Evaluates an email text for phishing, privacy leaks, and suspicious cues."""
-    privacy_findings = privacy_detector.detect_private_info(text)
-    markers = analyze_email_markers(text, sender, links)
+def predict_email_risk(text, sender="", links=(), subject="", reply_to="", html="", labels=()):
+    result = email_evidence(text, sender, links, subject, reply_to, html, labels)
+    privacy = privacy_detector.privacy_report(result.pop("_visible_body"))
+    observations = url_model_observations([link["url"] for link in result["links"]])
+    for link, observation in zip(result["links"], observations):
+        link["model_observation"] = observation
+    result.update({"privacy": privacy["detected"], "private_items_count": privacy["total_redacted"],
+                   "privacy_counts": privacy["counts"], "redacted_text": privacy["redacted_text"]})
+    return result
 
-    risk_score = 10.0
-    danger_markers = [m for m in markers if m.get("severity") in ["danger", "high"]]
-    medium_markers = [m for m in markers if m.get("severity") == "medium"]
 
-    risk_score += len(danger_markers) * 30.0 + len(medium_markers) * 15.0
+def text_field(body, key, max_chars, default=""):
+    value = body.get(key, default)
+    if not isinstance(value, str) or len(value) > max_chars:
+        raise ValueError(f"{key} must be text with at most {max_chars} characters.")
+    return value
 
-    # Privacy sensitivity factor: if sensitive numbers are requested or present
-    total_private_items = len(privacy_findings.get("aadhaar_numbers", [])) + \
-                          len(privacy_findings.get("phone_numbers", [])) + \
-                          len(privacy_findings.get("emails", []))
 
-    if total_private_items > 0:
-        markers.append({
-            "id": "privacy_data_detected",
-            "title": f"Sensitive Identity Data Detected ({total_private_items} items)",
-            "description": f"Contains unredacted personal identifiers: {len(privacy_findings.get('aadhaar_numbers', []))} Aadhaar, {len(privacy_findings.get('phone_numbers', []))} Phone numbers.",
+def list_field(body, key, limit):
+    value = body.get(key, [])
+    if not isinstance(value, list) or len(value) > limit:
+        raise ValueError(f"{key} must be a list with at most {limit} entries.")
+    return value
+
+
+def email_features(result):
+    ids = {item["id"] for item in result["markers"]}
+    return {key: int(key in ids) for key in (
+        "credential_request", "pressure", "payment_request", "link_deception",
+        "reply_domain_mismatch", "display_name_domain_mismatch", "subject_body_gap",
+    )} | {"links": len(result["links"])}
+
+
+def legacy_scan_response(result, gmail=False):
+    """Adapt evidence to the restored three-state renderer without inventing a score."""
+    level = {"suspicious": "danger", "uncertain": "suspicious", "neutral": "safe"}[result["risk_level"]]
+    indicators = result["markers"]
+    if not indicators or result["risk_level"] != "suspicious":
+        indicators = [{
+            "id": "assessment_summary", "title": result["assessment"],
+            "description": result["explanation"], "severity": "medium" if level == "suspicious" else "low",
+        }, *indicators]
+    # The installed Gmail content script renders legacy marker strings as HTML.
+    markers = [{
+        "id": item["id"], "title": escape(item["title"]), "description": escape(item["description"]),
+        "severity": item["severity"] if item["severity"] in {"danger", "high", "medium", "low", "safe"} else "low",
+    } for item in indicators]
+    legacy = {"risk_level": level, "safety_score": "—", "markers": markers,
+              "assessment": result["assessment"], "explanation": result["explanation"]}
+    if gmail:
+        return legacy | {"private_items_count": result.get("private_items_count", 0)}
+    direct_copy_kinds = {"aadhaar_numbers", "phone_numbers", "emails"}
+    if any(count for kind, count in result.get("privacy_counts", {}).items() if kind not in direct_copy_kinds):
+        legacy["private_items_count"] = 0
+        legacy["markers"].append({
+            "id": "full_privacy_review", "title": "Additional sensitive data detected",
+            "description": "Use the V2 redaction endpoint for these categories. The original copy control covers email, phone and Aadhaar.",
             "severity": "medium",
-            "category": "privacy"
         })
+    return result | legacy | {"evidence_level": result["risk_level"]}
 
-    # Try ML model if loaded
-    if email_model is not None:
-        try:
-            pred = email_model.predict([text])[0]
-            if hasattr(email_model, "predict_proba"):
-                proba = email_model.predict_proba([text])[0]
-                phish_prob = float(proba[1]) * 100.0
-                risk_score = round(0.6 * phish_prob + 0.4 * risk_score, 1)
-            else:
-                if pred == 1:
-                    risk_score = max(risk_score, 75.0)
-        except Exception:
-            pass
 
-    risk_score = min(99.0, max(5.0, round(risk_score, 1)))
-    if risk_score >= 65.0:
-        risk_level = "danger"
-    elif risk_score >= 35.0:
-        risk_level = "suspicious"
-    else:
-        risk_level = "safe"
-
-    return {
-        "risk_score": risk_score,
-        "safety_score": round(100.0 - risk_score, 1),
-        "risk_level": risk_level,
-        "markers": markers,
-        "privacy": privacy_findings,
-        "private_items_count": total_private_items
-    }
+def query_int(query, key, default, low, high):
+    value = int(query.get(key, [default])[0])
+    if not low <= value <= high:
+        raise ValueError(f"{key} must be between {low} and {high}.")
+    return value
 
 
 class SentinelAPIHandler(BaseHTTPRequestHandler):
-    def _send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+    timeout = 5
 
-    def _send_json_response(self, status_code, data):
-        self.send_response(status_code)
+    def allowed(self, path):
+        try:
+            host = urlsplit("//" + (self.headers.get("Host") or "")).hostname
+        except ValueError:
+            return False
+        origin = self.headers.get("Origin")
+        if host not in {"localhost", "127.0.0.1", "::1"} or (origin and origin not in ALLOWED_ORIGINS):
+            return False
+        if origin == "https://mail.google.com":
+            return path == "/api/scan-email"
+        return True
+
+    def _send_json_response(self, status, data=None):
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self._send_cors_headers()
+        self.send_header("Cache-Control", "no-store")
+        origin = self.headers.get("Origin")
+        if origin in ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            if self.command == "OPTIONS" and self.headers.get("Access-Control-Request-Private-Network") == "true":
+                self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode("utf-8"))
+        if data is not None:
+            self.wfile.write(json.dumps(data).encode())
 
     def do_OPTIONS(self):
-        self.send_response(204)
-        self._send_cors_headers()
-        self.end_headers()
+        path = self.path.partition("?")[0]
+        self._send_json_response(204 if self.allowed(path) else 403)
 
     def do_GET(self):
-        parsed = urlsplit(self.path)
-        path = parsed.path
-
-        if path == "/api/health" or path == "/":
-            self._send_json_response(200, {
-                "status": "online",
-                "app": "Sentinel AI Backend API",
-                "version": "1.0.0",
-                "db_status": "connected",
-                "models_loaded": {
-                    "url_phishing": url_model is not None,
-                    "email_phishing": email_model is not None
-                }
-            })
-
-        elif path == "/api/history":
-            try:
-                history = get_recent_history(limit=25)
-                self._send_json_response(200, {"history": history})
-            except Exception as e:
-                self._send_json_response(500, {"error": str(e)})
-
-        elif path == "/api/stats":
-            try:
-                stats = get_stats()
-                self._send_json_response(200, stats)
-            except Exception as e:
-                self._send_json_response(500, {"error": str(e)})
-
-        elif path == "/api/settings":
-            try:
-                settings = get_all_settings()
-                self._send_json_response(200, {"settings": settings})
-            except Exception as e:
-                self._send_json_response(500, {"error": str(e)})
-
-        else:
-            self._send_json_response(404, {"error": "Not Found"})
+        path, _, search = self.path.partition("?")
+        if not self.allowed(path):
+            return self._send_json_response(403, {"error": "Local SentinelAI client required."})
+        try:
+            query = parse_qs(search, max_num_fields=8)
+            kind = query.get("kind", [None])[0]
+            status = query.get("status", [None])[0]
+            if path in {"/api/health", "/"}:
+                result = {"status": "online", "app": "Sentinel AI Backend API", "version": "2.0.0",
+                          "db_status": "connected", "models_loaded": {"url_phishing": candidate() is not None,
+                                                                           "email_phishing": False}}
+            elif path in {"/api/history", "/api/v2/history"}:
+                limit = query_int(query, "limit", 25, 1, 100)
+                offset = query_int(query, "offset", 0, 0, 1_000_000)
+                history = get_recent_history(limit, offset, kind)
+                if path == "/api/history":
+                    history = [row | {"confidence": "—"} for row in history]
+                result = {"history": history}
+            elif path == "/api/stats":
+                result = get_stats()
+            elif path == "/api/settings":
+                result = {"settings": get_all_settings()}
+            elif path == "/api/threats":
+                result = threats.list_samples(kind, status, offset=query_int(query, "offset", 0, 0, 1_000_000))
+            elif path == "/api/threats/settings":
+                result = threats.settings()
+            elif path == "/api/threats/export":
+                mode = query.get("mode", ["features"])[0]
+                result = {"samples": threats.list_samples(kind, approved_only=True, mode=mode)}
+            else:
+                return self._send_json_response(404, {"error": "Not Found"})
+            self._send_json_response(200, result)
+        except ValueError as error:
+            self._send_json_response(400, {"error": str(error)})
+        except Exception:
+            self._send_json_response(500, {"error": "The local operation failed."})
 
     def do_POST(self):
-        parsed = urlsplit(self.path)
-        path = parsed.path
-
-        content_length = int(self.headers.get("Content-Length", 0))
-        body_bytes = self.rfile.read(content_length) if content_length > 0 else b"{}"
-
+        path = self.path.partition("?")[0]
+        if not self.allowed(path):
+            return self._send_json_response(403, {"error": "Local SentinelAI client required."})
+        if self.headers.get_content_type() != "application/json":
+            return self._send_json_response(415, {"error": "Use application/json."})
         try:
-            body = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
-        except Exception:
-            self._send_json_response(400, {"error": "Invalid JSON payload"})
-            return
-
-        if path == "/api/scan-url":
-            url = body.get("url", "").strip()
-            if not url:
-                self._send_json_response(400, {"error": "URL parameter is required"})
-                return
-
-            try:
-                result = predict_url_risk(url)
-                # Log scan in SQLite
-                log_scan(
-                    scan_type="url",
-                    target_preview=url,
-                    risk_level=result["risk_level"],
-                    confidence=result["risk_score"],
-                    markers=result["markers"],
-                    metadata=result["features"]
-                )
-                self._send_json_response(200, result)
-            except Exception as e:
-                self._send_json_response(500, {"error": f"Scan failed: {str(e)}"})
-
-        elif path == "/api/scan-email":
-            text = body.get("text", "").strip()
-            sender = body.get("sender", "").strip()
-            links = body.get("links", [])
-
-            if not text:
-                self._send_json_response(400, {"error": "Email text is required"})
-                return
-
-            try:
-                result = predict_email_risk(text, sender, links)
-                # Log scan in SQLite
-                log_scan(
-                    scan_type="email",
-                    target_preview=text[:120],
-                    risk_level=result["risk_level"],
-                    confidence=result["risk_score"],
-                    markers=result["markers"],
-                    metadata={"sender": sender, "privacy_items": result["private_items_count"]}
-                )
-                self._send_json_response(200, result)
-            except Exception as e:
-                self._send_json_response(500, {"error": f"Email scan failed: {str(e)}"})
-
-        elif path == "/api/privacy-redact":
-            text = body.get("text", "")
-            context = body.get("context", "extension_redact")
-
-            if not text:
-                self._send_json_response(400, {"error": "Text is required"})
-                return
-
-            try:
-                detected = privacy_detector.detect_private_info(text)
-                redacted_text = privacy_detector.redact_private_info(text)
-
-                total_redacted = len(detected.get("emails", [])) + \
-                                 len(detected.get("phone_numbers", [])) + \
-                                 len(detected.get("aadhaar_numbers", []))
-
-                log_privacy_audit(context, detected, total_redacted, text[:150])
-
-                self._send_json_response(200, {
-                    "original_length": len(text),
-                    "redacted_text": redacted_text,
-                    "detected": detected,
-                    "total_redacted": total_redacted
-                })
-            except Exception as e:
-                self._send_json_response(500, {"error": f"Redaction failed: {str(e)}"})
-
-        elif path == "/api/settings":
-            key = body.get("key")
-            value = body.get("value")
-            if not key:
-                self._send_json_response(400, {"error": "Setting key is required"})
-                return
-            try:
-                update_setting(key, value)
-                self._send_json_response(200, {"success": True, "key": key, "value": value})
-            except Exception as e:
-                self._send_json_response(500, {"error": str(e)})
-
-        else:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_REQUEST:
+                return self._send_json_response(413, {"error": "Request size is outside the allowed limit."})
+            body = json.loads(self.rfile.read(length))
+            if not isinstance(body, dict):
+                raise ValueError()
+        except (ValueError, UnicodeError):
+            return self._send_json_response(400, {"error": "Invalid JSON payload."})
+        except TimeoutError:
+            return self._send_json_response(408, {"error": "Request timed out."})
+        try:
+            result = self.handle_post(path, body)
+            self._send_json_response(200, result)
+        except KeyError:
             self._send_json_response(404, {"error": "Not Found"})
+        except (ValueError, UnicodeError) as error:
+            self._send_json_response(400, {"error": str(error)})
+        except Exception:
+            self._send_json_response(500, {"error": "The local operation failed."})
+
+    def handle_post(self, path, body):
+        gmail = self.headers.get("Origin") == "https://mail.google.com"
+        consent = body.get("collect_sample") is True and not gmail
+        preview = body.get("preview") is True and not gmail
+        if path in {"/api/scan-url", "/api/v2/scan-url"}:
+            url = text_field(body, "url", 2083).strip()
+            result = predict_url_risk(url)
+            parts, host, _ = split_url(url, assume_https=True)
+            # Trainable URL counts omit credentials, query and fragments.
+            features = extract_features_dict(destination(parts, host))
+            if not preview:
+                self.record_scan("url", result, features, consent)
+            return legacy_scan_response(result) if path == "/api/scan-url" else result
+        if path in {"/api/scan-email", "/api/v2/scan-email"}:
+            text = text_field(body, "text", 20000)
+            html = text_field(body, "html", 100000)
+            subject = text_field(body, "subject", 500)
+            if not (text.strip() or html.strip() or subject.strip()):
+                raise ValueError("Email text or subject is required.")
+            result = predict_email_risk(text, text_field(body, "sender", 500),
+                                        list_field(body, "links", 80), subject,
+                                        text_field(body, "reply_to", 500), html,
+                                        [label[:40] for label in list_field(body, "labels", 50) if isinstance(label, str)])
+            if not preview:
+                text_sample = (subject, result["redacted_text"]) if consent and body.get("collect_text") is True else None
+                self.record_scan("email", result, email_features(result), consent, text_sample)
+            return legacy_scan_response(result, gmail) if path == "/api/scan-email" else result
+        if path == "/api/scan-page":
+            url = text_field(body, "url", 2083)
+            result = webpage_evidence(url, body.get("observations"))
+            result["model_observation"] = url_model_observations([url])[0]
+            if preview:
+                return result
+            return self.record_scan("webpage", result, result["observations"], consent)
+        if path == "/api/privacy-redact":
+            text = text_field(body, "text", 40000)
+            if not text.strip():
+                raise ValueError("Text is required.")
+            approved = list_field(body, "approved", 1000)
+            if any(not isinstance(item, str) or len(item) > 70 for item in approved):
+                raise ValueError("Review selections must use returned finding IDs.")
+            region = text_field(body, "region", 2, "IN").upper()
+            if region not in privacy_detector.phonenumbers.SUPPORTED_REGIONS:
+                raise ValueError("Unknown phone region.")
+            result = privacy_detector.privacy_report(text, approved, region)
+            context = body.get("context")
+            if context not in ("extension_redact", "gmail_compose", "manual_scan", "clipboard"):
+                context = "extension_redact"
+            if not preview:
+                log_privacy_audit(context, result["counts"], result["total_redacted"], "")
+            return result
+        if path == "/api/settings":
+            key = text_field(body, "key", 60)
+            if key not in {"theme", "mode", "privacy_guard_enabled", "auto_redact_aadhaar", "gmail_scanner_enabled"}:
+                raise ValueError("Unknown setting.")
+            value = body.get("value")
+            if (key == "theme" and value not in ("cold", "warm")) or (key == "mode" and value not in ("light", "dark")) or (
+                key not in {"theme", "mode"} and value not in (True, False, "true", "false")
+            ):
+                raise ValueError("Invalid setting value.")
+            update_setting(key, value)
+            return {"success": True, "key": key, "value": value}
+        if path == "/api/threats/settings":
+            return threats.settings(body.get("enabled"), body.get("retention_days"), body.get("sanitized_text_enabled"))
+        if path == "/api/threats/review":
+            threats.review(body.get("id"), body.get("action"))
+            return {"success": True}
+        if path == "/api/threats/prune":
+            return {"deleted": threats.prune()}
+        raise KeyError(path)
+
+    @staticmethod
+    def record_scan(kind, result, features, consent, text_sample=None):
+        log_scan(kind, f"{kind.capitalize()} assessment", result["risk_level"], None,
+                 [{"id": item["id"]} for item in result["markers"]])
+        if consent:
+            result["sample_id"] = threats.collect(kind, features, result["risk_level"], consent, text_sample)
+        return result
 
     def log_message(self, format, *args):
-        # Override to keep terminal output clean and formatted
-        sys.stderr.write(f"[Sentinel AI HTTP] {self.address_string()} - {format % args}\n")
+        # Never log request targets, headers or bodies.
+        pass
 
 
 def run_server(port=8000):
     init_db()
-    HTTPServer.allow_reuse_address = True
-    
-    server_address = ("127.0.0.1", port)
-    try:
-        httpd = HTTPServer(server_address, SentinelAPIHandler)
-    except OSError as e:
-        if e.errno == 48: # Address already in use
-            print(f"\n[Warning] Port {port} is already in use by another process.")
-            alt_port = port + 1
-            print(f"[Sentinel AI] Attempting alternative port: http://127.0.0.1:{alt_port} ...")
-            try:
-                server_address = ("127.0.0.1", alt_port)
-                httpd = HTTPServer(server_address, SentinelAPIHandler)
-                port = alt_port
-            except OSError:
-                print(f"[Error] Could not bind to port {port} or {alt_port}.")
-                print(f"[Tip] Run: 'lsof -ti:{port} | xargs kill -9' to free the port.")
-                return
-        else:
-            raise e
-
-    print(f"=====================================================")
-    print(f"  SENTINEL AI - Security & Privacy Guard Server     ")
-    print(f"  Listening on: http://127.0.0.1:{port}               ")
-    print(f"  SQLite Database: backend/sentinel_ai.db           ")
-    print(f"  Press Ctrl+C to stop the server                   ")
-    print(f"=====================================================")
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\nShutting down Sentinel AI backend server.")
-        httpd.server_close()
+    with ThreadingHTTPServer(("127.0.0.1", port), SentinelAPIHandler) as httpd:
+        print(f"SentinelAI backend listening on http://127.0.0.1:{port}", flush=True)
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
-    port = 8000
-    if len(sys.argv) > 1:
-        try:
-            port = int(sys.argv[1])
-        except ValueError:
-            pass
-    run_server(port)
+    run_server(int(sys.argv[1]) if len(sys.argv) > 1 else 8000)

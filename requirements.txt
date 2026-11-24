@@ -1,0 +1,9 @@
+phonenumbers==9.0.44
+python-stdnum==2.2
+usaddress==0.5.16
+beautifulsoup4==4.13.5
+tldextract==5.1.2
+joblib==1.5.2
+scikit-learn==1.7.2
+pandas==2.3.3
+requests==2.32.5
