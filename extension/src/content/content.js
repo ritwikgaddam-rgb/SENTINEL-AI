@@ -47,7 +47,10 @@ import { attachComposePrivacy } from "./composePrivacy";
       const res = await fetch(`${BACKEND_URL}/api/scan-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, sender, subject, links })
+        body: JSON.stringify({ text, sender, subject, links }),
+        redirect: 'error',
+        referrerPolicy: 'no-referrer',
+        signal: AbortSignal.timeout(8000)
       });
       if (res.ok) {
         return await res.json();
@@ -58,6 +61,12 @@ import { attachComposePrivacy } from "./composePrivacy";
 
     return { risk_level: "unknown", assessment: "Analysis unavailable", safety_score: null, markers: [] };
   }
+
+  // The legacy API already encodes entities. Protect HTML text slots from raw
+  // tags returned by an older or incompatible local service as well.
+  const markerText = value => typeof value === 'string'
+    ? value.replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    : '';
 
   /**
    * Injects Sentinel AI Long Security Bar into opened Gmail messages
@@ -88,7 +97,12 @@ import { attachComposePrivacy } from "./composePrivacy";
       }));
       const analysis = await analyzeEmail(text.slice(0, 20000), sender.slice(0, 500), subject, links);
       const risk = ["safe", "suspicious", "danger"].includes(analysis.risk_level) ? analysis.risk_level : "unknown";
-      const score = Number.isFinite(analysis.safety_score) ? analysis.safety_score + "% Safe" : "Score unavailable";
+      const score = Number.isFinite(analysis.safety_score) && analysis.safety_score >= 0 && analysis.safety_score <= 100
+        ? analysis.safety_score + "% Safe" : "Score unavailable";
+      const markers = Array.isArray(analysis.markers)
+        ? analysis.markers.filter(item => item && typeof item.description === 'string').slice(0, 32)
+        : [];
+      const privateCount = Number.isSafeInteger(analysis.private_items_count) ? analysis.private_items_count : 0;
       const isSafe = risk === "safe";
       const isSuspicious = risk === "suspicious";
 
@@ -96,7 +110,7 @@ import { attachComposePrivacy } from "./composePrivacy";
       if ((risk === "danger" || risk === "suspicious") && bodyEl && !bodyEl.querySelector('.sentinel-threat-banner')) {
         const banner = document.createElement('div');
         banner.className = `sentinel-threat-banner ${risk}`;
-        const mainWarning = analysis.markers && analysis.markers[0] ? analysis.markers[0].description : "This email exhibits deceptive phishing heuristics. Proceed with caution.";
+        const mainWarning = markers.length ? markerText(markers[0].description) : "This email exhibits deceptive phishing heuristics. Proceed with caution.";
         banner.innerHTML = `
           <div class="sentinel-threat-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" style="display:block;">
@@ -122,14 +136,14 @@ import { attachComposePrivacy } from "./composePrivacy";
       const statusTitle = isSafe ? "No clear indicators" : isSuspicious ? "Security Caution" : risk === "danger" ? "Threat Flagged" : "No score";
       const statusSummary = isSafe
         ? "Review unexpected requests independently. Privacy findings are shown separately."
-        : (analysis.markers && analysis.markers[0] ? analysis.markers[0].description : "A local assessment could not be completed.");
+        : (markers.length ? markerText(markers[0].description) : "A local assessment could not be completed.");
 
       let markersHtml = '';
-      if (analysis.markers && analysis.markers.length > 0) {
-        markersHtml = analysis.markers.map(m => `
-          <div class="sentinel-audit-marker ${m.severity || 'medium'}">
-            <div class="sentinel-audit-marker-title">${m.title}</div>
-            <div class="sentinel-audit-marker-desc">${m.description}</div>
+      if (markers.length > 0) {
+        markersHtml = markers.map(m => `
+          <div class="sentinel-audit-marker ${['danger', 'high', 'medium', 'low', 'safe'].includes(m.severity) ? m.severity : 'medium'}">
+            <div class="sentinel-audit-marker-title">${markerText(m.title)}</div>
+            <div class="sentinel-audit-marker-desc">${markerText(m.description)}</div>
           </div>
         `).join('');
       } else {
@@ -171,12 +185,12 @@ import { attachComposePrivacy } from "./composePrivacy";
           <div class="sentinel-audit-markers-list">
             ${markersHtml}
           </div>
-          ${analysis.private_items_count > 0 ? `
+          ${privateCount > 0 ? `
             <div class="sentinel-audit-privacy-footer">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
               </svg>
-              <span>${analysis.private_items_count} Sensitive identity point(s) detected</span>
+              <span>${privateCount} Sensitive identity point(s) detected</span>
             </div>
           ` : ''}
         </div>

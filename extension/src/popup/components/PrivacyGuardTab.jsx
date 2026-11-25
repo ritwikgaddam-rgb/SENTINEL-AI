@@ -1,3 +1,4 @@
+import { localApi } from '../localApi';
 import React, { useEffect, useState } from 'react';
 
 export default function PrivacyGuardTab({ theme, mode, backendUrl }) {
@@ -16,7 +17,7 @@ export default function PrivacyGuardTab({ theme, mode, backendUrl }) {
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const response = await fetch(backendUrl + '/api/privacy-redact', {
+        const response = await localApi(backendUrl, '/api/privacy-redact', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: inputText, preview: true }), signal: controller.signal
         });
@@ -38,7 +39,7 @@ export default function PrivacyGuardTab({ theme, mode, backendUrl }) {
     await navigator.clipboard.writeText(report.redacted_text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-    fetch(backendUrl + '/api/privacy-redact', {
+    localApi(backendUrl, '/api/privacy-redact', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: inputText, context: 'clipboard' })
     }).catch(() => {});

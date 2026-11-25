@@ -4,6 +4,8 @@ SentinelAI runs a React browser preview and a Chrome Manifest V3 extension. The 
 
 ## Run locally
 
+For the verified presentation sequence and build folder, see the [hackathon demo guide](DEMO_GUIDE.md). The [final audit](FINAL_AUDIT.md) records the test results and release limits.
+
 Use Python 3.11–3.13. Run these commands from the repository root to start with separate runtime databases.
 
 ~~~sh
@@ -12,10 +14,10 @@ source .runtime/venv/bin/activate
 python -m pip install -r requirements.txt
 SENTINELAI_DB_PATH="$PWD/.runtime/sentinel_ai.db" \
 SENTINELAI_THREATS_PATH="$PWD/.runtime/sentinel_threats.db" \
-  ./start_backend.sh
+  python -m backend.server 8000
 ~~~
 
-The API listens on 127.0.0.1:8000. Set SENTINELAI_PORT and the popup's backend setting to use another port. The installed Gmail content script uses port 8000. To reuse existing scan history, back up the existing SQLite file and set SENTINELAI_DB_PATH to its path. Startup preserves rows when adjusting the schema.
+The API listens on 127.0.0.1:8000. The server command accepts a port argument. Match it in the popup's backend setting if you change it. The installed Gmail content script uses port 8000. Before pulling a version that removes database tracking, use SQLite's backup command to copy your local database outside the repository. Then set SENTINELAI_DB_PATH to the copy. Startup preserves rows when adjusting the schema.
 
 Build the extension from the repository root. On a fresh checkout install the locked npm dependencies first with `npm --prefix extension ci`.
 

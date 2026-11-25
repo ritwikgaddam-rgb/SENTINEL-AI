@@ -139,6 +139,9 @@ def smoke(page, preview, api):
         const originalFetch = window.fetch.bind(window);
         window.fetch = (url, options) => {
           const standard = 'http://127.0.0.1:8000';
+          if (window.fixtureOffline && typeof url === 'string' && url.startsWith(standard + '/')) {
+            return Promise.reject(new TypeError('Synthetic backend offline'));
+          }
           return originalFetch(typeof url === 'string' && url.startsWith(standard + '/')
             ? """ + json.dumps(api) + """ + url.slice(standard.length) : url, options);
         };
@@ -216,6 +219,13 @@ def smoke(page, preview, api):
     result = page.evaluate("window.changedPage")
     assert result["assessment"] == "Suspicious"
     assert "synthetic-secret" not in json.dumps(result)
+    page.button("Email Guard")
+    page.field("textarea.textarea-clean", "Can we meet in the library tomorrow?")
+    page.evaluate("window.fixtureOffline = true")
+    page.button("Analyze for Phishing & Leaks")
+    wait(lambda: page.has_text("Analysis unavailable"))
+    assert not page.evaluate("!!document.querySelector('.status-badge.danger')")
+    page.evaluate("window.fixtureOffline = false")
     # Exercise the compiled content script. The local preview substitutes only
     # the extension messaging transport and still runs the real privacy endpoint.
     page.evaluate("""document.body.innerHTML = '<div class="M9"><div class="editable Am Al" contenteditable="true"></div></div>';

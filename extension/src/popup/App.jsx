@@ -1,3 +1,4 @@
+import { localApi } from './localApi';
 import React, { useState, useEffect, useRef } from 'react';
 import Header from './components/Header';
 import ShieldStatus from './components/ShieldStatus';
@@ -42,13 +43,7 @@ export default function App() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
   // ── Google OAuth user (replaces Auth0) ──────────────────────────────────
-  const [googleUser, setGoogleUser] = useState(() => {
-    try {
-      const saved = localStorage.getItem('sentinel_google_user');
-      if (saved) return JSON.parse(saved);
-    } catch { /* ignore */ }
-    return null;
-  });
+  const [googleUser, setGoogleUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(false);
   // Keep the live access token in memory only (never persisted)
   const [accessToken, setAccessToken] = useState(null);
@@ -84,14 +79,14 @@ export default function App() {
   useEffect(() => {
     checkBackendHealth();
     fetchActiveTabUrl();
-    tryRestoreSession();
   }, [backendUrl]);
+  useEffect(() => { tryRestoreSession(); }, []);
 
   // ── Backend ───────────────────────────────────────────────────────────────
 
   const checkBackendHealth = async () => {
     try {
-      const res = await fetch(`${backendUrl}/api/health`);
+      const res = await localApi(backendUrl, '/api/health');
       setBackendOnline(res.ok);
     } catch {
       setBackendOnline(false);
@@ -119,7 +114,7 @@ export default function App() {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${backendUrl}/api/scan-url`, {
+      const res = await localApi(backendUrl, '/api/scan-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url })
@@ -143,18 +138,25 @@ export default function App() {
    * This runs every time the extension popup opens.
    */
   const tryRestoreSession = async () => {
-    if (googleUser) {
-      // User was previously signed in — try to silently get a fresh token
-      const { getTokenSilent } = await import('./gmailApi');
-      const tok = await getTokenSilent();
-      if (tok) {
-        setAccessToken(tok);
-      } else {
-        // Token is gone (user signed out from Chrome or revoked) — clear local state
-        setGoogleUser(null);
-        setAccessToken(null);
-        localStorage.removeItem('sentinel_google_user');
+    const restore = localStorage.getItem('sentinel_google_session') === 'true'
+      || localStorage.getItem('sentinel_google_user') !== null;
+    localStorage.removeItem('sentinel_google_user');
+    if (!restore) return;
+    setAuthLoading(true);
+    try {
+      const token = await getTokenSilent();
+      if (!token) {
+        localStorage.removeItem('sentinel_google_session');
+        return;
       }
+      const profile = await fetchUserProfile(token);
+      setGoogleUser(profile);
+      setAccessToken(token);
+      localStorage.setItem('sentinel_google_session', 'true');
+    } catch {
+      setAccessToken(null);
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -165,12 +167,11 @@ export default function App() {
     setAuthLoading(true);
     try {
       const tok = await getToken(true);
-      setAccessToken(tok);
       const profile = await fetchUserProfile(tok);
+      setAccessToken(tok);
       setGoogleUser(profile);
-      localStorage.setItem('sentinel_google_user', JSON.stringify(profile));
+      localStorage.setItem('sentinel_google_session', 'true');
     } catch (err) {
-      console.warn('[Sentinel AI] Sign-in failed:', err.message);
       alert(`Google Sign-In failed: ${err.message}\n\nMake sure your OAuth Client ID is set in manifest.json and the extension is listed in the Google Cloud Console.`);
     } finally {
       setAuthLoading(false);
@@ -181,12 +182,10 @@ export default function App() {
    * Sign out: revoke token and clear all stored user data.
    */
   const handleGoogleSignOut = async () => {
-    if (accessToken) {
-      await revokeToken(accessToken);
-    }
     setGoogleUser(null);
     setAccessToken(null);
-    localStorage.removeItem('sentinel_google_user');
+    localStorage.removeItem('sentinel_google_session');
+    if (accessToken) await revokeToken(accessToken);
   };
 
   // ── Settings helpers ──────────────────────────────────────────────────────
@@ -240,6 +239,7 @@ export default function App() {
           )}
           {activeTab === 'email' && (
             <EmailScannerTab
+              key={googleUser?.email || 'signed-out'}
               theme={theme}
               mode={mode}
               backendUrl={backendUrl}

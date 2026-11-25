@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 from bs4 import BeautifulSoup
 import requests
 import tldextract
+from privacy_detector import find_findings
 
 
 PUBLIC_SUFFIX = tldextract.TLDExtract(cache_dir=None, suffix_list_urls=(), include_psl_private_domains=True)
@@ -188,6 +189,12 @@ def writing_checks(text):
     port = os.getenv("SENTINELAI_LANGUAGETOOL_PORT")
     if port and port.isascii() and port.isdecimal() and len(port) <= 5 and 1 <= int(port) <= 65535:
         try:
+            # Preserve both Python and UTF-16 character offsets for the issues
+            # the writing service returns.
+            characters = list(prose)
+            for hit in find_findings(prose):
+                characters[hit.start:hit.end] = ("🟠" if ord(c) > 0xFFFF else " " for c in prose[hit.start:hit.end])
+            prose = "".join(characters)
             findings = local_language_tool(prose, text, int(port))
             return writing_result("local_languagetool", words, findings)
         except (requests.RequestException, ValueError, TypeError, KeyError, AttributeError):

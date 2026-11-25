@@ -201,13 +201,14 @@ class AssessmentTests(unittest.TestCase):
             response.status_code = 200
             response.iter_content.return_value = [json.dumps({"matches": [{"offset": 3, "length": 3,
                 "message": "Possible misspelling", "replacements": [{"value": "the"}]}]}).encode()]
-            result = writing_checks("🙂 teh exam. https://example.org")
+            result = writing_checks("🙂 teh exam. https://example.org\nPassword: sample-only-pass")
             self.assertEqual(result["issues"][0]["excerpt"], "teh")
             self.assertEqual(result["status"], "local_languagetool")
             self.assertFalse(client.trust_env)
             self.assertEqual(client.post.call_args.args, ("http://127.0.0.1:8081/v2/check",))
             self.assertFalse(client.post.call_args.kwargs["allow_redirects"])
             self.assertNotIn("example.org", client.post.call_args.kwargs["data"]["text"])
+            self.assertNotIn("sample-only-pass", client.post.call_args.kwargs["data"]["text"])
             response.status_code = 503
             self.assertEqual(writing_checks("Teh exam.")["status"], "limited_local_english")
 
@@ -267,6 +268,7 @@ class StorageTests(unittest.TestCase):
         self.addCleanup(env.stop)
         self.handler = object.__new__(server.SentinelAPIHandler)
         self.handler.headers = {"Host": "127.0.0.1:8000"}
+        self.handler.command = "POST"
         server.init_db()
 
     def test_api_consent_review_export_and_storage(self):
@@ -388,6 +390,11 @@ class StorageTests(unittest.TestCase):
         self.handler.headers["Origin"] = "https://mail.google.com"
         self.assertTrue(self.handler.allowed("/api/scan-email"))
         self.assertFalse(self.handler.allowed("/api/threats/export"))
+        self.handler.command = "GET"
+        self.assertFalse(self.handler.allowed("/api/scan-email"))
+        self.handler.command = "OPTIONS"
+        self.handler.headers["Access-Control-Request-Method"] = "POST"
+        self.assertTrue(self.handler.allowed("/api/scan-email"))
         self.handler.headers["Host"] = "nonlocal.example"
         self.assertFalse(self.handler.allowed("/api/scan-email"))
 

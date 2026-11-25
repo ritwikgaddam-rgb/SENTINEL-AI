@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS sanitized_samples (
 def connection():
     default = Path(__file__).with_name("sentinel_threats.db")
     path = Path(os.getenv("SENTINELAI_THREATS_PATH", str(default)))
+    path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, timeout=5)
     db.row_factory = sqlite3.Row
     try:

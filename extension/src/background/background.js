@@ -103,8 +103,9 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // Listen for messages from popup or content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id || !message || typeof message !== 'object') return false;
   if (message.type === "COMPOSE_PRIVACY") {
-    if (sender.id !== chrome.runtime.id || !sender.tab || !sender.url?.startsWith("https://mail.google.com/") ||
+    if (!sender.tab || sender.frameId !== 0 || !sender.url?.startsWith("https://mail.google.com/") ||
         typeof message.text !== "string" || message.text.length > 40000) return false;
     const preview = message.selected === undefined;
     fetch(BACKEND_URL + "/api/privacy-redact", {
@@ -112,7 +113,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: message.text, selected: message.selected, preview,
         findings_only: preview, context: "gmail_compose" }),
-      signal: AbortSignal.timeout(5000)
+      signal: AbortSignal.timeout(5000),
+      redirect: 'error',
+      referrerPolicy: 'no-referrer'
     }).then(response => {
       if (!response.ok) throw new Error("Local privacy analysis unavailable");
       return response.json();
@@ -123,12 +126,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Toolbar icon switching from the Settings popup
   if (message.type === "SET_TOOLBAR_ICON") {
+    if (sender.url !== chrome.runtime.getURL("popup.html")) return false;
     const variantId = message.variantId;
-    const paths = ICON_PATHS[variantId];
-    if (!paths) {
+    if (typeof variantId !== 'string' || !Object.hasOwn(ICON_PATHS, variantId)) {
       sendResponse({ success: false, error: "Unknown toolbar icon variant." });
       return false;
     }
+    const paths = ICON_PATHS[variantId];
 
     // Apply via chrome.action.setIcon (MV3)
     chrome.action.setIcon({ path: paths }, () => {
@@ -148,16 +152,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // keep sendResponse alive for async
   }
 
-  // URL scan passthrough from content script
-  if (message.type === "SCAN_URL") {
-    fetch(`${BACKEND_URL}/api/scan-url`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: message.url })
-    })
-      .then((res) => res.json())
-      .then((data) => sendResponse({ success: true, data }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
+  return false;
 });

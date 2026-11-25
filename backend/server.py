@@ -10,10 +10,11 @@ import os
 import json
 import base64
 import hashlib
+import re
 from html import escape
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import parse_qs
 
 # Ensure current and parent directory is in python path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -63,6 +64,7 @@ from url_advisory import candidate, extract_features_dict, url_model_observation
 
 
 MAX_REQUEST = 512 * 1024
+LOOPBACK_HOST = re.compile(r"(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?", re.I)
 
 # Safely resolve extension key/id without crashing if manifest is missing or formatted differently
 manifest_path = Path(PARENT_DIR) / "extension/manifest.json"
@@ -164,23 +166,28 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
     timeout = 5
 
     def allowed(self, path):
-        try:
-            host = urlsplit("//" + (self.headers.get("Host") or "")).hostname
-        except ValueError:
-            return False
+        host = self.headers.get("Host", "")
         origin = self.headers.get("Origin")
-        if host not in {"localhost", "127.0.0.1", "::1"} or (origin and origin not in ALLOWED_ORIGINS):
+        if not LOOPBACK_HOST.fullmatch(host) or (origin is not None and origin not in ALLOWED_ORIGINS):
+            return False
+        if origin is None and self.headers.get("Sec-Fetch-Site") == "cross-site":
             return False
         if origin == "https://mail.google.com":
-            return path == "/api/scan-email"
+            return path == "/api/scan-email" and (
+                self.command == "POST" or self.command == "OPTIONS"
+                and self.headers.get("Access-Control-Request-Method") == "POST"
+            )
         return True
 
     def _send_json_response(self, status, data=None):
+        payload = json.dumps(data).encode() if data is not None else b""
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
+        if status != 204:
+            self.send_header("Content-Length", str(len(payload)))
         origin = self.headers.get("Origin")
-        if origin in ALLOWED_ORIGINS:
+        if origin in ALLOWED_ORIGINS and self.allowed(self.path.partition("?")[0]):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -188,8 +195,8 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
             if self.command == "OPTIONS" and self.headers.get("Access-Control-Request-Private-Network") == "true":
                 self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
-        if data is not None:
-            self.wfile.write(json.dumps(data).encode())
+        if payload:
+            self.wfile.write(payload)
 
     def do_OPTIONS(self):
         path = self.path.partition("?")[0]
@@ -226,8 +233,8 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
             else:
                 return self._send_json_response(404, {"error": "Not Found"})
             self._send_json_response(200, result)
-        except ValueError as error:
-            self._send_json_response(400, {"error": str(error)})
+        except ValueError:
+            self._send_json_response(400, {"error": "Invalid query parameters."})
         except Exception:
             self._send_json_response(500, {"error": "The local operation failed."})
 
@@ -241,10 +248,13 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_REQUEST:
                 return self._send_json_response(413, {"error": "Request size is outside the allowed limit."})
-            body = json.loads(self.rfile.read(length))
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ValueError()
+            body = json.loads(raw)
             if not isinstance(body, dict):
                 raise ValueError()
-        except (ValueError, UnicodeError):
+        except (ValueError, RecursionError):
             return self._send_json_response(400, {"error": "Invalid JSON payload."})
         except TimeoutError:
             return self._send_json_response(408, {"error": "Request timed out."})
@@ -253,8 +263,8 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
             self._send_json_response(200, result)
         except KeyError:
             self._send_json_response(404, {"error": "Not Found"})
-        except (ValueError, UnicodeError) as error:
-            self._send_json_response(400, {"error": str(error)})
+        except (ValueError, RecursionError):
+            self._send_json_response(400, {"error": "Invalid request fields."})
         except Exception:
             self._send_json_response(500, {"error": "The local operation failed."})
 
@@ -348,10 +358,16 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
         pass
 
 
+class SentinelHTTPServer(ThreadingHTTPServer):
+    request_queue_size = 32
+
+
 def run_server(port=8000):
-    init_db()
-    with ThreadingHTTPServer(("127.0.0.1", port), SentinelAPIHandler) as httpd:
-        print(f"SentinelAI backend listening on http://127.0.0.1:{port}", flush=True)
+    with SentinelHTTPServer(("127.0.0.1", port), SentinelAPIHandler) as httpd:
+        init_db()
+        with threats.connection():
+            pass  # Create the separate review store even with collection disabled.
+        print(f"SentinelAI backend listening on http://127.0.0.1:{httpd.server_port}", flush=True)
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
@@ -359,6 +375,8 @@ def run_server(port=8000):
 
 
 if __name__ == "__main__":
+    # SQLite creates the database and its journal using the process umask.
+    os.umask(0o077)
     port = 8000
     for arg in sys.argv[1:]:
         if arg.isdigit():

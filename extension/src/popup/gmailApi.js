@@ -1,3 +1,4 @@
+import { localApi } from './localApi';
 /**
  * Sentinel AI — Gmail API Utility
  * All interactions with the Gmail REST API go through this module.
@@ -6,6 +7,15 @@
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const PEOPLE_BASE = 'https://people.googleapis.com/v1/people/me';
+
+function googleFetch(url, token) {
+  return fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10000),
+    redirect: 'error',
+    referrerPolicy: 'no-referrer',
+  });
+}
 
 // ─── Token Management ───────────────────────────────────────────────────────
 
@@ -25,16 +35,23 @@ export async function getToken(interactive = true) {
   });
 }
 
+function forgetCachedToken(token) {
+  if (!globalThis.chrome?.identity || !token) return Promise.resolve();
+  return new Promise(resolve => chrome.identity.removeCachedAuthToken({ token }, resolve));
+}
+
 export async function revokeToken(token) {
-  return new Promise((resolve) => {
-    if (!token) { resolve(); return; }
-    chrome.identity.removeCachedAuthToken({ token }, async () => {
-      try {
-        await fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`);
-      } catch { /* silent – best-effort */ }
-      resolve();
+  if (!token) return;
+  await forgetCachedToken(token);
+  try {
+    await fetch('https://oauth2.googleapis.com/revoke', {
+      method: 'POST',
+      body: new URLSearchParams({ token }),
+      signal: AbortSignal.timeout(5000),
+      redirect: 'error',
+      referrerPolicy: 'no-referrer',
     });
-  });
+  } catch { /* Local sign-out is complete even when Google is unreachable. */ }
 }
 
 export async function getTokenSilent() {
@@ -49,10 +66,7 @@ export async function getTokenSilent() {
 
 export async function fetchUserProfile(token) {
   try {
-    const res = await fetch(
-      `${PEOPLE_BASE}?personFields=names,emailAddresses,photos`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+    const res = await googleFetch(`${PEOPLE_BASE}?personFields=names,emailAddresses,photos`, token);
     if (res.ok) {
       const data = await res.json();
       const name = data.names?.[0]?.displayName ?? 'Google User';
@@ -62,9 +76,7 @@ export async function fetchUserProfile(token) {
     }
   } catch { /* fall through */ }
 
-  const res = await fetch(`${GMAIL_BASE}/profile`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  const res = await googleFetch(`${GMAIL_BASE}/profile`, token);
   if (!res.ok) throw new Error(`Profile fetch failed: ${res.status}`);
   const data = await res.json();
   return { name: data.emailAddress?.split('@')[0] ?? 'Google User', email: data.emailAddress ?? '', picture: null };
@@ -86,6 +98,7 @@ function decodeBody(encoded) {
 
 function extractPlainText(part) {
   if (!part) return '';
+  if (part.filename || part.body?.attachmentId) return '';
   if (part.mimeType === 'text/plain' && part.body?.data) {
     return decodeBody(part.body.data);
   }
@@ -100,6 +113,7 @@ function extractPlainText(part) {
 
 function extractHtmlText(part) {
   if (!part) return '';
+  if (part.filename || part.body?.attachmentId) return '';
   if (part.mimeType === 'text/html' && part.body?.data) {
     const html = decodeBody(part.body.data);
     return html
@@ -124,20 +138,20 @@ function getHeader(headers = [], name) {
 }
 
 async function fetchMessageDetail(token, messageId) {
-  const res = await fetch(`${GMAIL_BASE}/messages/${messageId}?format=full`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  const res = await googleFetch(`${GMAIL_BASE}/messages/${encodeURIComponent(messageId)}?format=full`, token);
+  if (res.status === 401) throw new Error('TOKEN_EXPIRED');
   if (!res.ok) throw new Error(`Message fetch failed: ${res.status}`);
   return res.json();
 }
 
 export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbox') {
   const listUrl = `${GMAIL_BASE}/messages?maxResults=${maxResults}&q=${encodeURIComponent(query)}`;
-  const listRes = await fetch(listUrl, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  const listRes = await googleFetch(listUrl, token);
   if (!listRes.ok) {
-    if (listRes.status === 401) throw new Error('TOKEN_EXPIRED');
+    if (listRes.status === 401) {
+      await forgetCachedToken(token);
+      throw new Error('TOKEN_EXPIRED');
+    }
     throw new Error(`Gmail list failed: ${listRes.status}`);
   }
   const listData = await listRes.json();
@@ -148,6 +162,13 @@ export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbo
   const details = await Promise.allSettled(
     toFetch.map(m => fetchMessageDetail(token, m.id))
   );
+  if (details.some(row => row.status === 'rejected' && row.reason?.message === 'TOKEN_EXPIRED')) {
+    await forgetCachedToken(token);
+    throw new Error('TOKEN_EXPIRED');
+  }
+  if (details.every(row => row.status === 'rejected')) {
+    throw new Error('Could not load messages. Try again.');
+  }
 
   return details
     .filter(r => r.status === 'fulfilled')
@@ -171,7 +192,7 @@ export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbo
 }
 
 export async function scanEmailWithBackend(backendUrl, emailObj) {
-  const res = await fetch(`${backendUrl}/api/scan-email`, {
+  const res = await localApi(backendUrl, '/api/scan-email', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text: (emailObj.body || emailObj.snippet || '').slice(0, 20000),
