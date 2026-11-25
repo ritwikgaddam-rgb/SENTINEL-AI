@@ -4,7 +4,11 @@ import unittest
 import numpy as np
 
 from backend import server
-from training.email_recall_study import Mail, choose_threshold, make_partitions
+from training.email_recall_study import (
+    Mail, audit_current_errors, choose_oof_threshold, choose_threshold,
+    extract_privacy_safe_features, extract_sender_display_features,
+    extract_structural_link_features, make_partitions
+)
 
 BENIGN = (
     "Hello.",
@@ -64,3 +68,107 @@ class EmailEvaluationTests(unittest.TestCase):
         self.assertEqual([mail for mail, _ in rows["fit"]], [unique])
         self.assertEqual([mail for mail, _ in rows["manual"]], [holdout])
         self.assertEqual(counts["fit"]["cross_partition_template"], 1)
+
+
+class StructuralFeatureAndRecallTests(unittest.TestCase):
+    def test_anchor_to_url_domain_mismatch_detected(self):
+        deceptive_links = [
+            {"url": "https://evil-phish.com/login", "label": "https://paypal.com/signin"},
+        ]
+        feats = extract_structural_link_features(deceptive_links)
+        self.assertEqual(feats["anchor_url_mismatch"], 1)
+        self.assertEqual(feats["total_links"], 1)
+
+        brand_deceptive = [
+            {"url": "https://account-update-portal.info/auth", "label": "Log in to your PayPal account"},
+        ]
+        feats_brand = extract_structural_link_features(brand_deceptive)
+        self.assertEqual(feats_brand["anchor_url_mismatch"], 1)
+
+        legit_links = [
+            {"url": "https://paypal.com/signin", "label": "https://paypal.com/account"},
+        ]
+        feats_legit = extract_structural_link_features(legit_links)
+        self.assertEqual(feats_legit["anchor_url_mismatch"], 0)
+
+    def test_known_esp_click_tracker_safelisting(self):
+        esp_links = [
+            {"url": "https://ct.sendgrid.net/ls/click?upn=abc123xyz", "label": "Manage notification preferences"},
+            {"url": "https://mailchimp.com/track/click?user=123", "label": "View your monthly invoice"},
+            {"url": "https://awstrack.me/L0/https:%2F%2Fexample.com", "label": "Order details"},
+        ]
+        feats = extract_structural_link_features(esp_links)
+        self.assertEqual(feats["is_esp_safelisted"], 1)
+        # ESP click trackers must NOT be flagged as open redirect attacks or anchor mismatches
+        self.assertEqual(feats["has_open_redirect"], 0)
+        self.assertEqual(feats["anchor_url_mismatch"], 0)
+
+    def test_url_obfuscation_signals(self):
+        raw_ip_link = [{"url": "http://192.168.1.100/verify", "label": "Verify account"}]
+        self.assertEqual(extract_structural_link_features(raw_ip_link)["has_raw_ip"], 1)
+
+        punycode_link = [{"url": "https://xn--pple-43d.com/login", "label": "Apple ID"}]
+        self.assertEqual(extract_structural_link_features(punycode_link)["has_punycode"], 1)
+
+        deep_subdomain = [{"url": "https://login.security.account.verify.evil.com/auth", "label": "Sign in"}]
+        self.assertEqual(extract_structural_link_features(deep_subdomain)["has_deep_subdomain"], 1)
+
+        tunnel_host = [{"url": "https://secure-login.pages.dev/token", "label": "Document"}]
+        self.assertEqual(extract_structural_link_features(tunnel_host)["has_tunnel_host"], 1)
+
+        open_redirect = [{"url": "https://example.org/redirect?url=https://phish.com", "label": "Continue"}]
+        self.assertEqual(extract_structural_link_features(open_redirect)["has_open_redirect"], 1)
+
+    def test_display_name_and_sender_mismatch(self):
+        spoofed = extract_sender_display_features("PayPal Security <urgent.notices29@gmail.com>")
+        self.assertEqual(spoofed["display_brand_mismatch"], 1)
+        self.assertEqual(spoofed["sender_is_freemail"], 1)
+
+        legit_brand = extract_sender_display_features("PayPal Support <support@paypal.com>")
+        self.assertEqual(legit_brand["display_brand_mismatch"], 0)
+        self.assertEqual(legit_brand["sender_is_freemail"], 0)
+
+        personal_freemail = extract_sender_display_features("Alice Smith <alice@gmail.com>")
+        self.assertEqual(personal_freemail["display_brand_mismatch"], 0)
+        self.assertEqual(personal_freemail["sender_is_freemail"], 1)
+
+        reply_to_diff = extract_sender_display_features("Service <noreply@corp.com>", reply_to="attacker@gmail.com")
+        self.assertEqual(reply_to_diff["reply_to_mismatch"], 1)
+
+    def test_oof_threshold_bounds_respect_target_fpr(self):
+        # 40 benign messages (label 0), 10 phishing messages (label 1)
+        labels = np.array([0] * 40 + [1] * 10)
+        # OOF probabilities: negatives mostly low, 1 moderate (0.3), 1 high (0.8)
+        # Positives mostly high
+        oof_probs = np.array([0.05] * 38 + [0.3, 0.8] + [0.4, 0.6, 0.7, 0.85, 0.9, 0.92, 0.95, 0.96, 0.98, 0.99])
+        ham_probs = np.array([0.1, 0.15, 0.25])
+
+        # Target FPR <= 2.5% (meaning at most 1 / 40 = 2.5% false positives)
+        threshold = choose_oof_threshold(labels, oof_probs, ham_probs, target_fpr=0.025)
+        self.assertGreaterEqual(threshold, 0.3)
+        self.assertGreater(threshold, np.max(ham_probs))
+
+        alerts = oof_probs > threshold
+        realized_fpr = np.mean(alerts[labels == 0])
+        self.assertLessEqual(realized_fpr, 0.025)
+
+    def test_audit_current_errors_slicing(self):
+        mail_0 = Mail("No links security advice", 0, "test", sender="security@corp.com", links=())
+        mail_1 = Mail("With link transactional", 0, "test", sender="receipts@sendgrid.net",
+                      links=({"url": "https://ct.sendgrid.net/click", "label": "Receipt"},))
+        mail_2 = Mail("Phishing credential harvest", 1, "test", sender="PayPal <bad@gmail.com>",
+                      links=({"url": "https://evil.com", "label": "Login"},))
+
+        rows = [mail_0, mail_1, mail_2]
+        labels = np.array([0, 0, 1])
+        # Simulate an FP on mail_0 and an FN on mail_2
+        predictions = np.array([1, 0, 0])
+        probs = np.array([0.65, 0.10, 0.40])
+
+        audit = audit_current_errors(labels, predictions, rows, probs)
+        self.assertEqual(audit["total_evaluated"], 3)
+        self.assertEqual(audit["false_positives"]["count"], 1)
+        self.assertEqual(audit["false_positives"]["by_links"]["0_links"], 1)
+        self.assertEqual(audit["false_negatives"]["count"], 1)
+        self.assertEqual(audit["false_negatives"]["by_sender"]["freemail"], 1)
+

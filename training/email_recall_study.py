@@ -5,13 +5,17 @@ from contextlib import closing
 import csv
 from dataclasses import dataclass
 from email import message_from_bytes, message_from_binary_file, policy
+from email.utils import parseaddr
 from hashlib import file_digest
+import ipaddress
 import json
 import mailbox
 import os
 from pathlib import Path
+import re
 import tarfile
 from time import perf_counter
+from urllib.parse import parse_qsl, urlsplit
 
 import joblib
 import numpy as np
@@ -22,19 +26,414 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.frozen import FrozenEstimator
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, precision_recall_curve
-from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import MaxAbsScaler
 from sklearn.svm import LinearSVC
 
 from backend import server
-from backend.assessments import email_evidence, link_items
+from backend.assessments import (
+    BRANDS, LOOKALIKES, PUBLIC_SUFFIX, email_evidence, link_items, registrable, split_url
+)
 from training.compare_email_models import mixed_features, model_text, normalized, prepare, template_groups, word_features
 from training.train_reviewed_features import evaluate
 
 ROOT = Path(__file__).resolve().parents[1]
 LABELS = {"Safe Email": 0, "Phishing Email": 1}
 FALSE_POSITIVE_BUDGET = .05
+OOF_TARGET_FPR = .025
+
+KNOWN_ESP_DOMAINS = frozenset({
+    "sendgrid.net", "ct.sendgrid.net",
+    "mailchimp.com", "mcsv.net", "list-manage.com",
+    "awstrack.me", "amazonses.com",
+    "hubspotemail.net", "hubspot.com", "hs-sites.com", "hubspotlinks.com",
+    "marketo.com", "mktomail.com",
+    "constantcontact.com", "rs6.net",
+    "sailthru.com", "emarsys.net", "campaign-archive.com",
+})
+
+FREE_WEBMAIL_DOMAINS = frozenset({
+    "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com",
+    "icloud.com", "mail.com", "zoho.com", "yandex.com", "protonmail.com", "proton.me",
+    "gmx.com", "fastmail.com", "ymail.com", "live.com",
+})
+
+TUNNEL_OR_FREE_HOSTS = frozenset({
+    "ngrok.io", "ngrok-free.app", "localtunnel.me", "trycloudflare.com",
+    "pages.dev", "workers.dev", "web.app", "firebaseapp.com",
+    "glitch.me", "herokuapp.com", "vercel.app", "netlify.app",
+    "surge.sh", "github.io",
+})
+
+OPEN_REDIRECT_PARAMS = frozenset({
+    "url", "redirect", "redirect_uri", "redirect_url", "next", "dest", "destination",
+    "target", "return", "return_url", "returnto", "r", "link", "goto", "uri",
+})
+
+
+def is_esp_domain(host):
+    reg = registrable(host)
+    if reg in KNOWN_ESP_DOMAINS:
+        return True
+    return any(host == esp or host.endswith("." + esp) for esp in KNOWN_ESP_DOMAINS)
+
+
+def extract_structural_link_features(links):
+    """
+    Extract privacy-safe structural indicators from message links.
+    Returns boolean flags and counts without logging raw URLs.
+    """
+    if not links:
+        return {
+            "total_links": 0,
+            "has_links": 0,
+            "anchor_url_mismatch": 0,
+            "has_raw_ip": 0,
+            "has_punycode": 0,
+            "has_deep_subdomain": 0,
+            "has_open_redirect": 0,
+            "has_tunnel_host": 0,
+            "is_esp_safelisted": 0,
+            "url_obfuscation_any": 0,
+        }
+
+    total_links = len(links)
+    anchor_mismatch = 0
+    has_raw_ip = 0
+    has_punycode = 0
+    has_deep_subdomain = 0
+    has_open_redirect = 0
+    has_tunnel_host = 0
+    is_esp_safelisted = 0
+
+    for item in links:
+        url = item["url"] if isinstance(item, dict) else str(item)
+        label = item.get("label", "") if isinstance(item, dict) else ""
+        if not url:
+            continue
+        try:
+            parts, host, ip = split_url(url, assume_https=True)
+        except (ValueError, UnicodeError):
+            continue
+
+        host_reg = registrable(host)
+        is_esp = is_esp_domain(host)
+        if is_esp:
+            is_esp_safelisted = 1
+
+        if ip is not None:
+            has_raw_ip = 1
+
+        if any(part.startswith("xn--") for part in host.split(".")) or host.startswith("xn--"):
+            has_punycode = 1
+
+        ext = PUBLIC_SUFFIX(host)
+        if ip is None and ext.subdomain:
+            subdomain_labels = ext.subdomain.split(".")
+            if len(subdomain_labels) >= 3:
+                has_deep_subdomain = 1
+
+        if host_reg in TUNNEL_OR_FREE_HOSTS or any(host.endswith("." + th) for th in TUNNEL_OR_FREE_HOSTS):
+            has_tunnel_host = 1
+
+        if parts.query and not is_esp:
+            try:
+                qsl = parse_qsl(parts.query, max_num_fields=50, errors="replace")
+                for qk, qv in qsl:
+                    if qk.lower() in OPEN_REDIRECT_PARAMS:
+                        if "://" in qv or qv.startswith("//") or "." in qv:
+                            has_open_redirect = 1
+                            break
+            except Exception:
+                pass
+
+        if label and not is_esp:
+            url_match = re.search(r"(?:https?://)?([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z0-9][-a-zA-Z0-9.]*)", label)
+            if url_match:
+                disp_str = url_match.group(1).rstrip(".,;!?)")
+                try:
+                    disp_reg = registrable(disp_str)
+                    if disp_reg and disp_reg != host_reg:
+                        anchor_mismatch = 1
+                except Exception:
+                    pass
+            for brand, brand_domain in BRANDS.items():
+                if re.search(rf"\b{re.escape(brand)}\b", label, re.I):
+                    if host_reg != brand_domain and host_reg not in KNOWN_ESP_DOMAINS:
+                        anchor_mismatch = 1
+                        break
+
+    url_obfuscation = int(has_raw_ip or has_punycode or has_deep_subdomain or has_open_redirect or has_tunnel_host)
+
+    return {
+        "total_links": total_links,
+        "has_links": int(total_links > 0),
+        "anchor_url_mismatch": anchor_mismatch,
+        "has_raw_ip": has_raw_ip,
+        "has_punycode": has_punycode,
+        "has_deep_subdomain": has_deep_subdomain,
+        "has_open_redirect": has_open_redirect,
+        "has_tunnel_host": has_tunnel_host,
+        "is_esp_safelisted": is_esp_safelisted,
+        "url_obfuscation_any": url_obfuscation,
+    }
+
+
+def extract_sender_display_features(sender="", reply_to=""):
+    """
+    Extract display name vs sender address domain mismatch and freemail flags.
+    """
+    name, address = parseaddr(sender or "")
+    sender_domain = address.rpartition("@")[2].lower().strip()
+    sender_reg = registrable(sender_domain) if sender_domain else ""
+
+    is_freemail = int(sender_reg in FREE_WEBMAIL_DOMAINS or sender_domain in FREE_WEBMAIL_DOMAINS)
+    is_esp = int(sender_reg in KNOWN_ESP_DOMAINS)
+
+    display_brand_mismatch = 0
+    if name and sender_reg:
+        for brand, brand_domain in BRANDS.items():
+            if re.search(rf"\b{re.escape(brand)}\b", name, re.I):
+                if sender_reg != brand_domain:
+                    display_brand_mismatch = 1
+                    break
+        if is_freemail and not display_brand_mismatch:
+            if re.search(r"\b(?:support|security|helpdesk|billing|service|account|verification|administrator|apple|paypal|google|microsoft|amazon|netflix|bank)\b", name, re.I):
+                display_brand_mismatch = 1
+
+    reply_to_mismatch = 0
+    if reply_to:
+        reply_addr = parseaddr(reply_to)[1]
+        reply_domain = reply_addr.rpartition("@")[2].lower().strip()
+        reply_reg = registrable(reply_domain) if reply_domain else ""
+        if reply_reg and sender_reg and reply_reg != sender_reg:
+            reply_to_mismatch = 1
+
+    return {
+        "display_brand_mismatch": display_brand_mismatch,
+        "sender_is_freemail": is_freemail,
+        "sender_is_esp": is_esp,
+        "reply_to_mismatch": reply_to_mismatch,
+    }
+
+
+def extract_privacy_safe_features(row_or_body, sender="", links=(), subject="", reply_to=""):
+    """
+    Combine link and sender structural features for a message or row.
+    """
+    if isinstance(row_or_body, Mail):
+        body = row_or_body.body
+        sender = row_or_body.sender
+        links = row_or_body.links
+        subject = row_or_body.subject
+        reply_to = row_or_body.reply_to
+    else:
+        body = str(row_or_body)
+
+    feat = extract_structural_link_features(links)
+    feat.update(extract_sender_display_features(sender, reply_to))
+    feat.update(
+        subject_present=int(bool(subject)),
+        sender_present=int(bool(sender)),
+        reply_to_present=int(bool(reply_to)),
+    )
+    return feat
+
+
+def audit_current_errors(labels, predictions, rows, probabilities=None):
+    """
+    Audit detection errors sliced by link count, sender category, and score margins.
+    """
+    labels = np.asarray(labels)
+    predictions = np.asarray(predictions)
+    probs = np.asarray(probabilities) if probabilities is not None else None
+
+    fps = np.where((labels == 0) & (predictions == 1))[0]
+    fns = np.where((labels == 1) & (predictions == 0))[0]
+
+    def slice_cohort(indices):
+        by_links = {"0_links": 0, "ge_1_links": 0}
+        by_sender = {"freemail": 0, "esp_transactional": 0, "other_domain": 0}
+        by_score_margin = {"margin_low": 0, "margin_mid": 0, "margin_high": 0}
+
+        for idx in indices:
+            row = rows[idx]
+            feat = extract_privacy_safe_features(row)
+            if feat["total_links"] == 0:
+                by_links["0_links"] += 1
+            else:
+                by_links["ge_1_links"] += 1
+
+            if feat["sender_is_freemail"]:
+                by_sender["freemail"] += 1
+            elif feat["sender_is_esp"]:
+                by_sender["esp_transactional"] += 1
+            else:
+                by_sender["other_domain"] += 1
+
+            if probs is not None:
+                p = float(probs[idx])
+                if p < 0.35:
+                    by_score_margin["margin_low"] += 1
+                elif p <= 0.70:
+                    by_score_margin["margin_mid"] += 1
+                else:
+                    by_score_margin["margin_high"] += 1
+
+        return {
+            "count": len(indices),
+            "by_links": by_links,
+            "by_sender": by_sender,
+            "by_score_margin": by_score_margin,
+        }
+
+    return {
+        "false_positives": slice_cohort(fps),
+        "false_negatives": slice_cohort(fns),
+        "total_evaluated": len(labels),
+    }
+
+
+def choose_oof_threshold(labels, oof_probabilities, ham_probabilities=(), target_fpr=OOF_TARGET_FPR):
+    """
+    Select threshold strictly on out-of-fold validation targeting <= target_fpr (2.5%)
+    and zero alerts on the benign short ham cohort.
+    """
+    labels = np.asarray(labels)
+    oof_p = np.asarray(oof_probabilities)
+    ham_p = np.asarray(ham_probabilities) if len(ham_probabilities) > 0 else np.array([])
+
+    thresholds = np.r_[0., np.unique(oof_p), 1.]
+
+    def at(t):
+        alerts = oof_p > t
+        fpr = np.mean(alerts[labels == 0]) if np.sum(labels == 0) > 0 else 0.0
+        recall = np.mean(alerts[labels == 1]) if np.sum(labels == 1) > 0 else 0.0
+        short_fpr = np.mean(ham_p > t) if len(ham_p) > 0 else 0.0
+        return fpr, recall, short_fpr
+
+    viable = [
+        (recall, -fpr, -short_fpr, float(t))
+        for t in thresholds
+        for fpr, recall, short_fpr in (at(t),)
+        if fpr <= target_fpr and short_fpr == 0.0
+    ]
+    if not viable:
+        return 1.0
+    return max(viable)[-1]
+
+
+class CalibratedStackingClassifier:
+    """
+    Calibrated stacking meta-learner combining calibrated text probability
+    with privacy-safe structural link and sender signals.
+    """
+    def __init__(self, base_text_pipeline, meta_penalty=4.0):
+        self.base_text_pipeline = base_text_pipeline
+        self.calibrated_text_model = None
+        self.meta_penalty = meta_penalty
+        self.meta_learner = LogisticRegression(
+            C=0.5,
+            class_weight={0: meta_penalty, 1: 1.0},
+            max_iter=500,
+            random_state=42,
+        )
+        self.threshold = 0.5
+        self.feature_names = [
+            "text_prob", "has_links", "anchor_url_mismatch", "has_raw_ip",
+            "has_punycode", "has_deep_subdomain", "has_open_redirect",
+            "has_tunnel_host", "is_esp_safelisted", "url_obfuscation_any",
+            "display_brand_mismatch", "sender_is_freemail", "reply_to_mismatch"
+        ]
+
+    def _extract_meta_features(self, text_probs, rows):
+        feats = [extract_privacy_safe_features(r) for r in rows]
+        cols = [
+            text_probs,
+            np.array([f["has_links"] for f in feats]),
+            np.array([f["anchor_url_mismatch"] for f in feats]),
+            np.array([f["has_raw_ip"] for f in feats]),
+            np.array([f["has_punycode"] for f in feats]),
+            np.array([f["has_deep_subdomain"] for f in feats]),
+            np.array([f["has_open_redirect"] for f in feats]),
+            np.array([f["has_tunnel_host"] for f in feats]),
+            np.array([f["is_esp_safelisted"] for f in feats]),
+            np.array([f["url_obfuscation_any"] for f in feats]),
+            np.array([f["display_brand_mismatch"] for f in feats]),
+            np.array([f["sender_is_freemail"] for f in feats]),
+            np.array([f["reply_to_mismatch"] for f in feats]),
+        ]
+        return np.column_stack(cols)
+
+    def fit_and_tune_oof(self, fit_rows, y_fit, cal_rows, y_cal, ham_rows=(), n_splits=5):
+        """
+        Train using Stratified K-Fold OOF validation to select a robust threshold.
+        """
+        all_rows = list(fit_rows) + list(cal_rows)
+        all_y = np.r_[y_fit, y_cal]
+
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        oof_meta_probs = np.zeros(len(all_rows))
+
+        text_inputs = [model_text(r.body, r.subject) for r in all_rows]
+
+        for train_idx, val_idx in skf.split(all_rows, all_y):
+            X_tr = [text_inputs[i] for i in train_idx]
+            y_tr = all_y[train_idx]
+            X_va = [text_inputs[i] for i in val_idx]
+
+            fold_base = make_pipeline(word_features(), LinearSVC(C=0.5, class_weight="balanced", random_state=42))
+            fold_base.fit(X_tr, y_tr)
+            fold_cal = CalibratedClassifierCV(FrozenEstimator(fold_base), method="sigmoid")
+            fold_cal.fit(X_tr, y_tr)
+
+            p_val = fold_cal.predict_proba(X_va)[:, 1]
+            rows_val = [all_rows[i] for i in val_idx]
+            meta_X_val = self._extract_meta_features(p_val, rows_val)
+
+            # Fit intermediate meta learner on train
+            p_tr = fold_cal.predict_proba(X_tr)[:, 1]
+            rows_tr = [all_rows[i] for i in train_idx]
+            meta_X_tr = self._extract_meta_features(p_tr, rows_tr)
+
+            fold_meta = LogisticRegression(C=0.5, class_weight={0: self.meta_penalty, 1: 1.0}, max_iter=500, random_state=42)
+            fold_meta.fit(meta_X_tr, y_tr)
+            oof_meta_probs[val_idx] = fold_meta.predict_proba(meta_X_val)[:, 1]
+
+        # Fit final full text base model and calibrate on cal_rows
+        X_fit_text = [model_text(r.body, r.subject) for r in fit_rows]
+        self.base_text_pipeline.fit(X_fit_text, y_fit)
+        X_cal_text = [model_text(r.body, r.subject) for r in cal_rows]
+        self.calibrated_text_model = CalibratedClassifierCV(FrozenEstimator(self.base_text_pipeline), method="sigmoid")
+        self.calibrated_text_model.fit(X_cal_text, y_cal)
+
+        # Fit final meta-learner on calibration set or combined set
+        p_cal = self.calibrated_text_model.predict_proba(X_cal_text)[:, 1]
+        meta_cal = self._extract_meta_features(p_cal, cal_rows)
+        self.meta_learner.fit(meta_cal, y_cal)
+
+        # Compute ham probabilities if ham rows are provided
+        ham_meta_probs = np.array([])
+        if ham_rows:
+            ham_meta_probs = self.predict_proba(ham_rows)
+
+        self.threshold = choose_oof_threshold(all_y, oof_meta_probs, ham_meta_probs, target_fpr=OOF_TARGET_FPR)
+        return self.threshold
+
+    def predict_proba(self, rows):
+        text_inputs = [model_text(r.body, r.subject) for r in rows]
+        if self.calibrated_text_model is None:
+            # Fallback if uncalibrated
+            p_text = self.base_text_pipeline.predict_proba(text_inputs)[:, 1]
+        else:
+            p_text = self.calibrated_text_model.predict_proba(text_inputs)[:, 1]
+        meta_X = self._extract_meta_features(p_text, rows)
+        return self.meta_learner.predict_proba(meta_X)[:, 1]
+
+    def predict(self, rows):
+        return (self.predict_proba(rows) > self.threshold).astype(int)
+
 
 
 @dataclass(frozen=True)
@@ -221,9 +620,9 @@ def dataset(args):
     return make_partitions({"fit": fit, "validation": validation, "manual": manual, "real": real}), dev_ham, audits
 
 
-def frame(rows, context=False):
+def frame(rows, context=False, structural=False):
     data = pd.DataFrame({"text": [model_text(row.body, row.subject) for row in rows]})
-    if context:
+    if context or structural:
         features = []
         for row in rows:
             details = email_evidence(row.body, row.sender, row.links, row.subject, row.reply_to)
@@ -233,6 +632,8 @@ def frame(rows, context=False):
                            reply_to_present=int(bool(row.reply_to)),
                            weak_links=sum(any(m["severity"] == "medium" for m in link["markers"])
                                           for link in details["links"]))
+            if structural:
+                numeric.update(extract_privacy_safe_features(row))
             features.append(numeric)
         data = pd.concat([data, pd.DataFrame(features)], axis=1)
     return data
