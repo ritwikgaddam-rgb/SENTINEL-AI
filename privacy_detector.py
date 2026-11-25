@@ -31,8 +31,36 @@ PLACEHOLDERS = {
 }
 
 ORDINARY_ID = re.compile(
-    r"\b(?:order|invoice|tracking|reference|product|transaction|customer|ticket|bank account|card)"
-    r"(?:[ \t]+(?:number|id|no\.?|code)){0,2}[ \t]*[:=#-]?[ \t]*$", re.I
+    r"\b(?:order|invoice|tracking|reference|product|transaction|customer|ticket)"
+    r"(?:[ \t]+(?:number|reference|id|no\.?|code)){0,2}(?:[ \t]+is)?[ \t]*[:=#-]?[ \t]*$", re.I
+)
+# A label owns the whole numeric field, even if its validator rejects the value.
+# This prevents an unlabelled matcher from claiming the field or a substring of it.
+LABELLED_NUMBER = re.compile(
+    r"\b(?:(?P<aadhaar>aadhaar|aadhar|uidai)|(?P<phone>phone|mobile|telephone|contact|call|tel|whatsapp|text)"
+    r"|ssn|social security number|(?:credit |debit )?card|(?:bank|savings|checking) account)\b"
+    r"(?:[ \t]+(?:number|no\.?|id|me|us))?[ \t]*(?:(?:is|at)[ \t]+)?[:=#]?[ \t]*"
+    r"(?P<value>\+?(?:\([0-9]+\)[ \t]*)?[0-9]+"
+    r"(?:(?:[ \t]+|[.-])(?:\([0-9]+\)[ \t]*)?[0-9]+)*"
+    r"(?:[ \t]*(?:ext\.?|x)[ \t]*[0-9]{1,7})?)(?!\w)", re.I,
+)
+AADHAAR_FORMAT = r"[2-9][0-9]{3}[ -]?[0-9]{4}[ -]?[0-9]{4}"
+QUANTITY_PREFIX = re.compile(
+    r"\b(?:population|quantity|count|total|amount|price|cost|balance|distance|weight|revenue)"
+    r"(?:[ \t]+of(?:[ \t]+[\w'-]+){1,5})?"
+    r"(?:[ \t]+(?:is|was|of|equals|reached|rose to|fell to|stands at|estimated at|approximately|about))*"
+    r"[ \t]*[:=]?[ \t]*[$£€₹]?[ \t]*$", re.I,
+)
+QUANTITY_SUFFIX = re.compile(
+    r"^[ \t]*(?:%|(?:people|residents|inhabitants|items|units|votes|users|bytes|kilometers|kilometres|"
+    r"kg|km|dollars|rupees)\b)", re.I,
+)
+MATH_OPERATOR = r"(?:\*\*|[+*/=×÷−^%-]|\b(?:plus|minus|times|divided by|multiplied by|x)\b)"
+LEFT_OPERAND = re.compile(r"[0-9][) \t]*" + MATH_OPERATOR + r"[ (\t]*[+-]?[ \t]*$", re.I)
+RIGHT_OPERAND = re.compile(r"^[) \t]*" + MATH_OPERATOR + r"[ (\t]*[+-]?[ \t]*[0-9]", re.I)
+VERBAL_MATH = re.compile(
+    r"\b(?:add|subtract|multiply|divide|sum of|product of|difference between)[ \t]+"
+    r"[+-]?[0-9]+(?:[.,][0-9]+)*[ \t]+(?:and|to|from|by)[ \t]+[+-]?[0-9]+(?:[.,][0-9]+)*\b", re.I
 )
 NUMBER_KINDS = {"aadhaar_numbers", "phone_numbers", "ssn_numbers", "card_numbers"}
 US_ADDRESS = re.compile(
@@ -62,6 +90,51 @@ def digits(value):
     return re.sub(r"[^0-9]", "", value)
 
 
+def ordinary_number(text, start, end, reserved):
+    before = text[max(0, start - 100):start]
+    after = text[end:end + 80]
+    if ORDINARY_ID.search(before) or QUANTITY_PREFIX.search(before) or QUANTITY_SUFFIX.match(after):
+        return True
+    previous = LEFT_OPERAND.search(before)
+    if not previous and text[start] == "+":
+        # The matcher sometimes includes the binary plus in the candidate.
+        previous = re.search(r"[0-9][) \t]*$", before)
+    # A slash after a labelled phone can introduce a second contact.
+    if previous and not reserved[start - len(before) + previous.start()]:
+        return True
+    return RIGHT_OPERAND.match(after) is not None
+
+
+def valid_aadhaar(value):
+    return bool(re.fullmatch(AADHAAR_FORMAT, value) and verhoeff.is_valid(digits(value)))
+
+
+def phone_validation(value, region, label=""):
+    try:
+        number = phonenumbers.parse(value, region, keep_raw_input=True)
+    except phonenumbers.NumberParseException:
+        return "invalid_number_plan"
+    source = number.country_code_source
+    international = source in (phonenumbers.CountryCodeSource.FROM_NUMBER_WITH_PLUS_SIGN,
+                               phonenumbers.CountryCodeSource.FROM_NUMBER_WITH_IDD)
+    if not phonenumbers.is_valid_number(number) or (
+        not international and not phonenumbers.is_valid_number_for_region(number, region)
+    ):
+        return "invalid_number_plan"
+    kind = phonenumbers.number_type(number)
+    if label.lower() == "mobile" and kind not in (phonenumbers.PhoneNumberType.MOBILE,
+                                                  phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE):
+        return "not_mobile_number"
+    # An Indian fixed line needs an area code. Bare national digits give no indication
+    # where it ends. Ask for review unless the draft supplies dialing or grouping context.
+    if region == "IN" and not international and kind == phonenumbers.PhoneNumberType.FIXED_LINE:
+        groups = re.findall(r"[0-9]+", value)
+        area_length = phonenumbers.length_of_geographical_area_code(number)
+        if not groups[0].startswith("0") and len(groups[0]) != area_length:
+            return "ambiguous_fixed_line"
+    return "number_plan_valid"
+
+
 def valid_card(value):
     number = digits(value)
     return len(set(number)) > 1 and number[0] != "0" and luhn.is_valid(number)
@@ -82,26 +155,32 @@ class Finding:
 
 def find_findings(text, region="IN"):
     matches = []
+    reserved = bytearray(len(text))
+    for expression in VERBAL_MATH.finditer(text):
+        reserved[expression.start():expression.end()] = b"\x01" * len(expression[0])
 
-    def add(kind, start, end, confidence="high", validation="contextual"):
+    def add(kind, start, end, confidence="high", validation="contextual", unlabelled=False):
         if start > 0 and (text[start - 1].isalnum() or text[start - 1] == "_"):
             return
         if end < len(text) and (text[end].isalnum() or text[end] == "_"):
             return
-        if confidence == "review" and kind in NUMBER_KINDS and ORDINARY_ID.search(text[max(0, start - 65):start]):
-            return
+        if unlabelled:
+            if any(reserved[start:end]) or ordinary_number(text, start, end, reserved):
+                return
+            if kind == "aadhaar_numbers" and re.search(r"[0-9][ \t]+$", text[max(0, start - 80):start]):
+                return  # A checksum-valid suffix of a longer grouped identifier.
         if kind in NUMBER_KINDS and (re.search(r"[0-9][ \t-]{0,3}-$", text[max(0, start - 6):start])
                                      or re.match(r"-[ \t-]{0,3}[0-9]", text[end:end + 6])):
             return
         matches.append(Finding(start, end, kind, confidence, validation))
 
-    def detect(kind, pattern, validator=None, confidence="high"):
+    def detect(kind, pattern, validator=None, confidence="high", unlabelled=False):
         for match in re.finditer(pattern, text, re.IGNORECASE):
             start, end = match.span(1)
             value = match.group(1)
 
             if validator is None or validator(value):
-                add(kind, start, end, confidence, "format_valid" if validator else "contextual")
+                add(kind, start, end, confidence, "format_valid" if validator else "contextual", unlabelled)
 
     # Email addresses
     detect(
@@ -109,39 +188,31 @@ def find_findings(text, region="IN"):
         r"(?<![\w.%+-])([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63})\b"
     )
 
-    # Phone numbers: require valid format and context
+    for field in LABELLED_NUMBER.finditer(text):
+        start, end = field.span("value")
+        value = field["value"]
+        reserved[start:end] = b"\x01" * (end - start)
+        if field["aadhaar"]:
+            valid = valid_aadhaar(value)
+            add("aadhaar_numbers", start, end, "high" if valid else "review",
+                "checksum_valid" if valid else "invalid_format_or_checksum")
+        elif field["phone"]:
+            validation = phone_validation(value, region, field["phone"])
+            # A short digit after a verb ("call 3 people") is rarely a phone field.
+            if (validation == "number_plan_valid" or len(digits(value)) >= 7
+                    or field["phone"].lower() in {"phone", "telephone", "mobile", "tel"}):
+                add("phone_numbers", start, end, "high" if validation == "number_plan_valid" else "review", validation)
+
     for match in phonenumbers.PhoneNumberMatcher(text, region, max_tries=250):
-        if not phonenumbers.is_valid_number(match.number):
+        if any(reserved[match.start:match.end]):
             continue
+        validation = phone_validation(match.raw_string, region)
+        if validation != "invalid_number_plan":
+            automatic = match.raw_string.startswith("+") and validation == "number_plan_valid"
+            add("phone_numbers", match.start, match.end, "high" if automatic else "review", validation, unlabelled=True)
 
-        context = text[max(0, match.start - 60):match.start]
-
-        labelled = re.search(
-            r"\b(?:phone|mobile|telephone|contact|call|tel|whatsapp|text)"
-            r"(?:[ \t]+(?:number|no\.?|me|us))?"
-            r"[ \t]*(?:(?:is|at)[ \t]+)?[:=]?[ \t]*$",
-            context,
-            re.IGNORECASE
-        )
-
-        if ORDINARY_ID.search(context):
-            continue
-        if labelled or match.raw_string.startswith("+"):
-            add("phone_numbers", match.start, match.end, validation="number_plan_valid")
-        else:
-            add("phone_numbers", match.start, match.end, "review", "number_plan_valid")
-
-    # Aadhaar: context and checksum validation
-    for match in re.finditer(
-        r"\b(?:aadhaar|aadhar|uidai)(?:[ \t]+(?:number|no\.?))?[ \t]*(?:is[ \t]+)?[:=]?[ \t]*"
-        r"([0-9]{4}[ -]?[0-9]{4}[ -]?[0-9]{4})(?![\w-]|[ -]?[0-9])", text, re.I,
-    ):
-        number = digits(match[1])
-        valid = number[0] in "23456789" and verhoeff.is_valid(number)
-        add("aadhaar_numbers", *match.span(1), "high" if valid else "review",
-            "checksum_valid" if valid else "invalid_format_or_checksum")
-    detect("aadhaar_numbers", r"(?<![\w-])([2-9][0-9]{3}[ -]?[0-9]{4}[ -]?[0-9]{4})(?![\w-]|[ -]?[0-9])",
-           lambda value: verhoeff.is_valid(digits(value)), "review")
+    detect("aadhaar_numbers", rf"(?<![\w-])({AADHAAR_FORMAT})(?![\w-]|[ -]?[0-9])",
+           valid_aadhaar, "review", unlabelled=True)
 
     # US Social Security numbers
     def valid_ssn(value):
@@ -157,7 +228,7 @@ def find_findings(text, region="IN"):
     detect(
         "ssn_numbers",
         r"\b([0-9]{3}-[0-9]{2}-[0-9]{4})\b",
-        valid_ssn, "review"
+        valid_ssn, "review", unlabelled=True
     )
 
     detect(
@@ -217,7 +288,7 @@ def find_findings(text, region="IN"):
         valid_card
     )
     detect("card_numbers", r"(?<![\w-])((?:[0-9]{4}[ -]){3}[0-9]{4})(?![\w-])",
-           valid_card, "review")
+           valid_card, "review", unlabelled=True)
 
     detect("pan_numbers", r"\bPAN(?:\s*(?:card|number|no\.?))?\s*[:=]?\s*([A-Z]{3}[ABCFGHLJPT][A-Z][0-9]{4}[A-Z])\b")
     detect("passport_numbers", r"\bpassport\s*(?:number|no\.)?\s*[:=]\s*([A-Z0-9]{6,12})\b",
