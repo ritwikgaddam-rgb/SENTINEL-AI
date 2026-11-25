@@ -3,6 +3,8 @@ import re
 from dataclasses import dataclass
 from threading import Lock
 
+from residential_addresses import ADDRESS_LABEL, address_spans
+
 import phonenumbers
 from stdnum import verhoeff, iban, luhn
 
@@ -302,18 +304,20 @@ def find_findings(text, region="IN"):
     detect("auth_tokens", r"\b(?:bearer\s+|(?:(?:access|refresh|session|oauth|auth)[ _-]?)?token\s*[:=]\s*[\"']?)([A-Z0-9_./+=-]{12,1024})(?![A-Z0-9_./+=-])")
     detect("auth_tokens", r"\b(eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,})\b")
 
-    # Explicitly labelled residential or mailing addresses
-    detect(
-        "addresses",
-        r"\b(?:home address|residential address|mailing address|"
-        r"shipping address|address)\s*(?:is\s*|[:=]\s*)"
-        r"([^\n;]{8,180}?)\s*(?=\n|;|$|(?:email|phone|fax|password|postal code)\s*[:=])",
-        lambda value: bool(re.search(r"[0-9]", value) and re.search(r"[A-Za-z]{2,}", value))
-    )
-    detect("addresses", r"\b([0-9]{1,6}[ \t]+(?:[^\W\d_][\w.'’-]*[ \t]+){1,5}"
-           r"(?:street|road|avenue|lane|drive|boulevard|court|st|rd|ave|ln|dr|blvd|ct))\b",
-           confidence="review")
-    detect("addresses", r"\b(P\.?\s*O\.?\s+Box\s+[0-9]{1,10})\b", confidence="review")
+    structured = list(address_spans(text))
+    for start, end, confidence in structured:
+        add("addresses", start, end, confidence, "address_components")
+    # A labelled free-form value may be useful to review when its components
+    # are unfamiliar. Never let it override a shorter, recognized span.
+    structured_starts = {start for start, _, _ in structured}
+    for label in ADDRESS_LABEL.finditer(text):
+        if label.end() in structured_starts:
+            continue
+        fragment = re.match(r"[^.;!?\r\n:]{4,160}", text[label.end():])
+        if fragment:
+            value = fragment[0].rstrip()
+            if re.search(r"\d", value) and re.search(r"[A-Za-z]{2}", value):
+                add("addresses", label.end(), label.end() + len(value), "review", "label_only")
     for pattern in (US_MULTILINE, US_ADDRESS):
         for match in pattern.finditer(text):
             if is_us_address(match[1]):

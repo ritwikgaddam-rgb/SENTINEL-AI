@@ -1,0 +1,22 @@
+Hi demo team,
+
+Here is the fictional registration record for our privacy demonstration.
+Email: student@example.org
+Telephone: +1 (202) 555-0103
+Aadhaar: 2345 6789 0124
+I live in Flat 402 at Example Apartments near Sample Park in Hyderabad.
+Postal code: SW1A 1AA
+SSN: 123-45-6789
+Bank account: 12345678901234
+IFSC: ABCD0123456
+IBAN: GB82 WEST 1234 5698 7654 32
+Credit card: 4111 1111 1111 1111
+PAN: ABCPA1234Z
+Passport: A1234567
+UPI ID: student@bank
+Password: demo-only-pass
+API key: example_key_12345
+Session token: sample_token_12345
+
+Thanks,
+The demo team

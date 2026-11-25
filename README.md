@@ -17,18 +17,14 @@ SENTINELAI_THREATS_PATH="$PWD/.runtime/sentinel_threats.db" \
 
 The API listens on 127.0.0.1:8000. Set SENTINELAI_PORT and the popup's backend setting to use another port. The installed Gmail content script uses port 8000. To reuse existing scan history, back up the existing SQLite file and set SENTINELAI_DB_PATH to its path. Startup preserves rows when adjusting the schema.
 
-Build with the existing Vite script. In this checkout, Git tracks the original extension bundle and some installed dependencies. Build in a local copy to keep the protected originals intact.
+Build the extension from the repository root. On a fresh checkout install the locked npm dependencies first with `npm --prefix extension ci`.
 
 ~~~sh
-mkdir -p .runtime/extension-build
-cp -R extension/src extension/public extension/package.json extension/package-lock.json \
-  extension/popup.html extension/vite.config.js extension/manifest.json .runtime/extension-build/
-npm --prefix .runtime/extension-build ci
-npm --prefix .runtime/extension-build run build
-(cd .runtime/extension-build/dist && python -m http.server 4173 --bind 127.0.0.1)
+npm --prefix extension run build
+python -m http.server 4173 --bind 127.0.0.1 --directory extension/dist
 ~~~
 
-Open [the browser preview](http://127.0.0.1:4173/popup.html). In Chrome, use **Load unpacked** in chrome://extensions and select .runtime/extension-build/dist. Live Gmail OAuth requires the existing Google project to authorize the extension ID and the test account.
+Open [the browser preview](http://127.0.0.1:4173/popup.html). In Chrome, use **Load unpacked** in `chrome://extensions` and select `extension/dist`. After a rebuild, reload the extension and refresh open Gmail tabs. Live Gmail OAuth requires the existing Google project to authorize the extension ID and the test account.
 
 ## Local API
 
@@ -43,9 +39,11 @@ Open [the browser preview](http://127.0.0.1:4173/popup.html). In Chrome, use **L
 
 Use preview: true for an assessment without a history write. Email and URL scans with enough evidence return finite complementary screening scores. Raw model estimates appear separately. The scores summarize evidence and model output. They do not measure the probability that a message or site is safe. Sparse email or unavailable models produce an explicit unscored state.
 
-The Privacy tab and Gmail compose use the same loopback validator. The existing compose pill expands to review categories and choose individual occurrences. Review-only matches start unchecked. Redact all includes the review-only matches. Quotes and signatures stay out of scope unless the user includes them. The pill edits the draft locally and keeps the most recent undo in memory. The Privacy tab uses the existing preview and copy button for validated categories.
+The Privacy tab and Gmail compose use the same loopback validator. The existing compose pill expands to review categories and choose individual occurrences. Review-only matches start unchecked. Redact all covers automatic matches and explicitly selected review items. Quotes and signatures stay out of scope unless the user includes them. The pill edits the draft locally and keeps the most recent undo in memory. The Privacy tab uses the existing preview and copy button for validated categories.
 
-For the tested bundle and exact regression results, see the [scoring and privacy verification report](REGRESSION_REPORT.md).
+See the [privacy presentation guide and synthetic email](docs/privacy-demo.md) for the updated compose controls and address examples. Reload the rebuilt extension from `extension/dist`.
+
+For the earlier tested bundle and scoring regression results, see the [scoring and privacy verification report](REGRESSION_REPORT.md).
 
 The built-in English writing checks run locally. For broader coverage, start a standalone LanguageTool server on loopback and set SENTINELAI_LANGUAGETOOL_PORT before launching SentinelAI. The app masks URLs, addresses in email syntax, quoted lines, fenced code and conventional signatures before sending prose to that local service. It falls back to built-in rules if the service times out. [LanguageTool setup](https://dev.languagetool.org/http-server.html)
 
@@ -73,7 +71,7 @@ Use --text with an approved masked-email export, or use --kind url or --kind web
 ~~~sh
 python -m unittest discover -s tests -v
 python -m pip install websocket-client==1.8.0
-python -m tests.browser_smoke .runtime/extension-build/dist
+python -m tests.browser_smoke extension/dist
 ~~~
 
 The browser smoke test uses a disposable Chrome profile, isolated SQLite databases and synthetic messages and forms. Set SENTINELAI_CHROME if Chrome is installed elsewhere. See the [audit and evaluation report](V2_REPORT.md) for measurements, baseline screenshots, security findings and frontend integration details.

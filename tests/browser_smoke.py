@@ -13,6 +13,7 @@ from urllib.request import urlopen
 
 import websocket
 
+from privacy_detector import privacy_report
 from backend import server
 from backend.assessments import PAGE_FEATURES
 
@@ -73,6 +74,60 @@ class ChromePage:
             Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value').set.call(node, value);
             node.dispatchEvent(new Event('input', { bubbles: true }));
         })(""" + json.dumps(selector) + ", " + json.dumps(value) + ")")
+
+
+def exercise_compose(page):
+    editor = "document.querySelector('.editable')"
+    rows = "document.querySelectorAll('.sentinel-compose-findings label:not(.sentinel-audit-marker-title) input')"
+    trigger = "document.querySelector('.sentinel-compose-indicator img')"
+
+    def expect(expression):
+        wait(lambda: page.evaluate(expression))
+
+    def draft(text):
+        page.evaluate(f"{editor}.textContent = {json.dumps(text)}")
+        page.evaluate(f"{editor}.dispatchEvent(new Event('input', {{bubbles:true}}))")
+
+    def check_text(text):
+        expect(f"{editor}.textContent === {json.dumps(text)}")
+
+    expect(f"!!{trigger}")
+    page.evaluate(f"{trigger}.click()")
+    optional = "Aadhaar: 2345 6789 0122\nPhone: 1234567890\nCalculate 123456789012 + 1234567890."
+    draft(optional + "\nEmail: demo@example.org")
+    expect(f"{rows}.length === 3")
+    assert page.evaluate(f"[...{rows}].map(i => i.checked)") == [False, False, True]
+    page.button("Redact all")
+    check_text(optional + "\nEmail: [EMAIL]")
+    expect(f"{rows}.length === 2")
+    assert page.evaluate("[...document.querySelectorAll('button')].find(b => b.innerText === 'Redact all').disabled")
+    page.evaluate(f"{rows}[0].click()")
+    page.button("Redact all")
+    check_text(optional.replace("2345 6789 0122", "[AADHAAR]") + "\nEmail: [EMAIL]")
+
+    markup = ('✨ I live in <b>Flat 402</b> at <i>Example Apartments</i> near Sample Park in Hyderabad.'
+              ' <strong>Please reply.</strong> Email: demo@example.org')
+    page.evaluate(f"{editor}.innerHTML = {json.dumps(markup)}")
+    expect(f"{rows}.length === 2")
+    page.button("Deselect all")
+    page.evaluate(f"{rows}[0].click()")
+    page.button("Redact selected")
+    check_text("✨ I live in [ADDRESS]. Please reply. Email: demo@example.org")
+    assert page.evaluate(f"{editor}.querySelector('b').textContent === '[ADDRESS]' && "
+                         f"{editor}.querySelector('strong').textContent === 'Please reply.'")
+    page.button("Undo")
+    expect(f"{editor}.innerHTML === {json.dumps(markup)}")
+
+    demo = (Path(__file__).resolve().parents[1] / "docs/privacy-demo-email.txt").read_text().strip()
+    draft(demo)
+    expect(f"{rows}.length === 16")
+    assert page.evaluate(f"[...{rows}].every(i => i.checked)")
+    assert page.evaluate("document.querySelectorAll('.sentinel-compose-findings .sentinel-audit-marker').length") == 16
+    page.button("Redact all")
+    check_text(privacy_report(demo)["redacted_text"])
+    expect(f"{rows}.length === 0")
+    page.button("Undo")
+    check_text(demo)
 
 
 def smoke(page, preview, api):
@@ -161,6 +216,18 @@ def smoke(page, preview, api):
     result = page.evaluate("window.changedPage")
     assert result["assessment"] == "Suspicious"
     assert "synthetic-secret" not in json.dumps(result)
+    # Exercise the compiled content script. The local preview substitutes only
+    # the extension messaging transport and still runs the real privacy endpoint.
+    page.evaluate("""document.body.innerHTML = '<div class="M9"><div class="editable Am Al" contenteditable="true"></div></div>';
+        window.chrome.runtime = {id:'fixture', getURL:path => '/' + path,
+            sendMessage: async ({text, selected}) => ({success:true, data:await window.testPost(
+                '/api/privacy-redact', {text, selected, findings_only:selected === undefined,
+                    preview:selected === undefined, context:'gmail_compose'})})};
+        const content = document.createElement('script');
+        content.src = '/content.js';
+        document.body.appendChild(content);""")
+    exercise_compose(page)
+    print("Compose bulk consent, rich-text selective address redaction, undo and the full demo passed.")
     print("Browser preview and local HTTP API passed Shield, email, privacy copy, history and dynamic page fixtures.")
 
 

@@ -89,6 +89,10 @@ function privacyRequest(text, selected) {
   });
 }
 
+function automatic(match) {
+  return match.ambiguous === false && match.confidence === 'high';
+}
+
 export function attachComposePrivacy(editor, container, theme, logo) {
   const indicator = element('div', 'sentinel-compose-indicator theme-' + theme);
   const trigger = element('img');
@@ -170,6 +174,7 @@ export function attachComposePrivacy(editor, container, theme, logo) {
         input.indeterminate = count > 0 && count < ids.length;
       }
       redactSelected.disabled = !source || selected.size === 0;
+      all.disabled = !source || !findings.some(item => automatic(item) || selected.has(item.id));
     }
 
     function select(ids, enabled) {
@@ -190,7 +195,7 @@ export function attachComposePrivacy(editor, container, theme, logo) {
       card.append(category.wrapper);
       group.forEach((match, index) => {
         const needsReview = match.validation === 'invalid_format_or_checksum' ? ' · Invalid format or checksum' :
-          match.ambiguous ? ' · Review' : '';
+          !automatic(match) ? ' · Review' : '';
         const row = toggle('#' + (index + 1) + ' ' + match.masked_preview + needsReview,
           selected.has(match.id), value => select([match.id], value));
         choices.push({ input: row.checkbox, ids: [match.id] });
@@ -200,8 +205,8 @@ export function attachComposePrivacy(editor, container, theme, logo) {
     }
     const redactSelected = action('Redact selected', () => redact(findings.filter(item => selected.has(item.id))));
     const allIds = findings.map(item => item.id);
-    const all = action('Redact all', () => redact(findings), !findings.length);
-    all.title = 'Includes review-only matches';
+    const all = action('Redact all', () => redact(findings.filter(item => automatic(item) || selected.has(item.id))));
+    all.title = 'Redacts automatic matches and any review items you selected';
     controls.append(action('Select all', () => select(allIds, true), !findings.length),
       action('Deselect all', () => select(allIds, false), !findings.length), redactSelected, all,
       action('Undo', restore, !undo));
@@ -248,7 +253,7 @@ export function attachComposePrivacy(editor, container, theme, logo) {
         }
         source = draft.text;
         findings = result.findings;
-        selected = new Set(findings.filter(item => !item.ambiguous).map(item => item.id));
+        selected = new Set(findings.filter(automatic).map(item => item.id));
         status = findings.length ? '' : 'No sensitive information detected.';
       } catch {
         if (request !== revision || !editor.isConnected) return;
