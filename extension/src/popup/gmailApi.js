@@ -133,6 +133,18 @@ function extractHtmlText(part) {
   return '';
 }
 
+function messageLinks(part) {
+  if (!part || part.filename || part.body?.attachmentId) return [];
+  if (part.mimeType === 'text/html' && part.body?.data && typeof document !== 'undefined') {
+    // Template content stays inert, including remote images in an email.
+    const template = document.createElement('template');
+    template.innerHTML = decodeBody(part.body.data).slice(0, 100000);
+    return [...template.content.querySelectorAll('a[href]')].slice(0, 40).map(a =>
+      ({url: a.getAttribute('href'), label: a.textContent.slice(0, 200)}));
+  }
+  return (part.parts || []).flatMap(messageLinks).slice(0, 40);
+}
+
 function getHeader(headers = [], name) {
   return headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
 }
@@ -184,7 +196,7 @@ export async function fetchRecentEmails(token, maxResults = 20, query = 'in:inbo
         replyTo: getHeader(headers, 'reply-to') || '',
         date: getHeader(headers, 'date') || '',
         snippet: msg.snippet || '',
-        body,
+        body, links: messageLinks(msg.payload),
         labelIds: msg.labelIds ?? [],
         isUnread: (msg.labelIds ?? []).includes('UNREAD')
       };
@@ -197,7 +209,7 @@ export async function scanEmailWithBackend(backendUrl, emailObj) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text: (emailObj.body || emailObj.snippet || '').slice(0, 20000),
       sender: emailObj.sender?.slice(0, 500), subject: emailObj.subject?.slice(0, 500),
-      reply_to: emailObj.replyTo?.slice(0, 500), labels: emailObj.labelIds?.slice(0, 50) })
+      links: emailObj.links?.slice(0, 40), reply_to: emailObj.replyTo?.slice(0, 500), labels: emailObj.labelIds?.slice(0, 50) })
   });
   if (!res.ok) throw new Error('Backend scan failed');
   return res.json();

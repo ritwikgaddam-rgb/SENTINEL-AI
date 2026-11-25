@@ -1,3 +1,5 @@
+import { handleScan } from '../inference/worker.mjs';
+
 /**
  * Sentinel AI - Background Service Worker (Manifest V3)
  * Handles lifecycle, tab monitoring, context menus, and toolbar icon switching.
@@ -104,6 +106,7 @@ chrome.runtime.onInstalled.addListener(() => {
 // Listen for messages from popup or content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !message || typeof message !== 'object') return false;
+  if (message.type === "SCREEN") return handleScan(message, sender, sendResponse);
   if (message.type === "COMPOSE_PRIVACY") {
     if (!sender.tab || sender.frameId !== 0 || !sender.url?.startsWith("https://mail.google.com/") ||
         typeof message.text !== "string" || message.text.length > 40000) return false;

@@ -377,7 +377,7 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
               <p className="status-desc">
                 {manualResult.private_items_count > 0
                   ? `Identified ${manualResult.private_items_count} private identity data points.`
-                  : 'No credential or identity exposure found.'}
+                  : manualResult.private_items_count === 0 ? 'No credential or identity exposure found.' : 'Privacy analysis unavailable.'}
               </p>
             </div>
           </div>

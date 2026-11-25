@@ -242,8 +242,15 @@ class StructuralFeatureAndRecallTests(unittest.TestCase):
 
         rows = [Mail(t, l, "unit_test") for t, l in zip(texts, labels)]
         stacker = CalibratedStackingClassifier(dense_text_pipeline=pipe)
-        stacker.fit_and_tune_oof(rows[:2], np.array(labels[:2]), rows[2:], np.array(labels[2:]), n_splits=2)
-        preds = stacker.predict(rows)
-        self.assertEqual(len(preds), 4)
+        with self.assertRaisesRegex(ValueError, "Both fit and validation"):
+            stacker.fit_and_tune_oof(rows[:2], labels[:2], rows[2:], labels[2:], n_splits=2)
+        examples = [Mail(chr(97 + i // 26) + chr(97 + i % 26) + " " + texts[i % 4],
+                         labels[i % 4], "fixture") for i in range(64)]
+        stacker.fit_and_tune_oof(examples[:40], [r.label for r in examples[:40]],
+                                 examples[40:], [r.label for r in examples[40:]], n_splits=2)
+        self.assertEqual(stacker.predict(rows).shape, (4,))
 
-
+    def test_tracker_does_not_override_an_explicit_destination_mismatch(self):
+        features = extract_structural_link_features([{"url": "https://ct.sendgrid.net/path",
+                                                     "label": "https://example.org/path"}])
+        self.assertEqual(features["anchor_url_mismatch"], 1)

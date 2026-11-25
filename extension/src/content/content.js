@@ -11,7 +11,6 @@ import { attachComposePrivacy } from "./composePrivacy";
   let userTheme = "cold"; // "cold" (#03094b) or "warm" (#541504)
   let userMode = "dark";
   let isEnabled = true;
-  const BACKEND_URL = "http://127.0.0.1:8000";
 
   // Sync settings with chrome.storage if available
   if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
@@ -44,21 +43,9 @@ import { attachComposePrivacy } from "./composePrivacy";
    */
   async function analyzeEmail(text, sender, subject, links) {
     try {
-      const res = await fetch(`${BACKEND_URL}/api/scan-email`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, sender, subject, links }),
-        redirect: 'error',
-        referrerPolicy: 'no-referrer',
-        signal: AbortSignal.timeout(8000)
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // Local fallback
-    }
-
+      const result = await chrome.runtime.sendMessage({type: 'SCREEN', kind: 'email', input: {text, sender, subject, links}});
+      if (result) return result;
+    } catch { /* Extension was unloaded while the Gmail tab was open. */ }
     return { risk_level: "unknown", assessment: "Analysis unavailable", safety_score: null, markers: [] };
   }
 
@@ -80,15 +67,17 @@ import { attachComposePrivacy } from "./composePrivacy";
       if (card.getAttribute('data-sentinel-scanned') === 'true' || card.querySelector('.sentinel-gmail-bar-container')) {
         return;
       }
-      card.setAttribute('data-sentinel-scanned', 'true');
+
 
       // Find message body
       const bodyEl = card.querySelector('.a3s, .ii.gt');
       const text = bodyEl ? bodyEl.innerText.trim() : "";
-      if (!text || text.length < 15) return;
+      if (!text) return;
+      card.setAttribute('data-sentinel-scanned', 'true');
 
       const senderEl = card.querySelector('.gD');
-      const sender = senderEl ? (senderEl.getAttribute('email') || senderEl.innerText) : "";
+      const address = senderEl?.getAttribute('email');
+      const sender = address ? (senderEl.textContent.trim() + ' <' + address + '>') : (senderEl?.textContent || '');
 
       // Analyze
       const subject = (document.querySelector('h2.hP')?.textContent || '').slice(0, 500);

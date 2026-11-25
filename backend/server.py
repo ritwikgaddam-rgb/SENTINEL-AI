@@ -6,6 +6,7 @@ Runs natively using Python standard library (no external server framework requir
 """
 
 import sys
+import sqlite3
 import os
 import json
 import base64
@@ -55,7 +56,7 @@ except ImportError:
         )
         sys.exit(1)
 
-from database import init_db, log_scan, log_privacy_audit, get_recent_history, get_stats, get_all_settings, update_setting
+from database import get_db_connection, init_db, log_scan, log_privacy_audit, get_recent_history, get_stats, get_all_settings, update_setting
 from assessments import destination, email_evidence, split_url, url_evidence, webpage_evidence
 import privacy_detector
 import threats
@@ -110,6 +111,22 @@ def predict_email_risk(text, sender="", links=(), subject="", reply_to="", html=
     link_probability = max((item.get("phishing_probability", 0) for item in observations), default=0)
     enough = result["risk_level"] == "neutral" or bool(result["markers"] or result["links"])
     return apply_score(result, observation, weight=.25, enough=enough, link_probability=link_probability)
+
+
+def optional_store(operation, *args, **kwargs):
+    """Only storage failures are optional. Keep inference and programming errors visible."""
+    try:
+        return True, operation(*args, **kwargs)
+    except (sqlite3.Error, OSError):
+        return False, None
+
+
+def history_status():
+    from contextlib import closing
+    def check():
+        with closing(get_db_connection()) as db:
+            db.execute("SELECT id FROM scan_history LIMIT 0")
+    return "connected" if optional_store(check)[0] else "unavailable"
 
 
 def text_field(body, key, max_chars, default=""):
@@ -212,7 +229,7 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
             status = query.get("status", [None])[0]
             if path in {"/api/health", "/"}:
                 result = {"status": "online", "app": "Sentinel AI Backend API", "version": "2.0.0",
-                          "db_status": "connected", "models_loaded": {"url_phishing": candidate() is not None,
+                          "db_status": history_status(), "models_loaded": {"url_phishing": candidate() is not None,
                                                                            "email_phishing": email_model() is not None}}
             elif path in {"/api/history", "/api/v2/history"}:
                 limit = query_int(query, "limit", 25, 1, 100)
@@ -323,7 +340,8 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
             if context not in ("extension_redact", "gmail_compose", "manual_scan", "clipboard"):
                 context = "extension_redact"
             if not preview:
-                log_privacy_audit(context, result["counts"], result["total_redacted"], "")
+                saved, _ = optional_store(log_privacy_audit, context, result["counts"], result["total_redacted"], "")
+                result["persistence"] = {"history": "saved" if saved else "unavailable"}
             return result
         if path == "/api/settings":
             key = text_field(body, "key", 60)
@@ -347,10 +365,14 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def record_scan(kind, result, features, consent, text_sample=None):
-        log_scan(kind, f"{kind.capitalize()} assessment", result["risk_level"], result["risk_score"],
-                 [{"id": item["id"]} for item in result["markers"]], metadata={"screening_score": True})
+        saved, _ = optional_store(log_scan, kind, f"{kind.capitalize()} assessment", result["risk_level"],
+                                  result["risk_score"], [{"id": item["id"]} for item in result["markers"]],
+                                  metadata={"screening_score": True})
+        result["persistence"] = {"history": "saved" if saved else "unavailable", "collection": "not_requested"}
         if consent:
-            result["sample_id"] = threats.collect(kind, features, result["risk_level"], consent, text_sample)
+            ok, sample = optional_store(threats.collect, kind, features, result["risk_level"], consent, text_sample)
+            result["sample_id"] = sample
+            result["persistence"]["collection"] = ("saved" if sample is not None else "skipped") if ok else "unavailable"
         return result
 
     def log_message(self, format, *args):
@@ -364,9 +386,8 @@ class SentinelHTTPServer(ThreadingHTTPServer):
 
 def run_server(port=8000):
     with SentinelHTTPServer(("127.0.0.1", port), SentinelAPIHandler) as httpd:
-        init_db()
-        with threats.connection():
-            pass  # Create the separate review store even with collection disabled.
+        optional_store(init_db)
+        # The review store initializes on first use and is optional for scanning.
         print(f"SentinelAI backend listening on http://127.0.0.1:{httpd.server_port}", flush=True)
         try:
             httpd.serve_forever()

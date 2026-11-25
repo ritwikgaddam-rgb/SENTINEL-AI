@@ -21,6 +21,7 @@ from urllib.parse import parse_qsl, urlsplit
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import TruncatedSVD
@@ -28,7 +29,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.frozen import FrozenEstimator
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, precision_recall_curve
-from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.pipeline import FeatureUnion, make_pipeline
 from sklearn.preprocessing import MaxAbsScaler
 from sklearn.svm import LinearSVC
@@ -272,7 +273,7 @@ def extract_linkless_social_engineering_features(body="", subject="", links=()):
 def make_dense_semantic_pipeline(n_components=100):
     """
     Compact subword/character + word TF-IDF Latent Semantic Analysis pipeline.
-    Captures dense social-engineering topic and intent representation without relying on exact tokens.
+    Projects corpus-specific TF-IDF features into a lower-dimensional lexical space.
     """
     text_union = FeatureUnion([
         ("word", TfidfVectorizer(ngram_range=(1, 2), min_df=2, sublinear_tf=True, max_features=15000)),
@@ -350,7 +351,7 @@ def extract_structural_link_features(links):
         if host_reg in TUNNEL_OR_FREE_HOSTS or any(host.endswith("." + th) for th in TUNNEL_OR_FREE_HOSTS):
             has_tunnel_host = 1
 
-        if parts.query and not is_esp:
+        if parts.query:
             try:
                 qsl = parse_qsl(parts.query, max_num_fields=50, errors="replace")
                 for qk, qv in qsl:
@@ -361,7 +362,7 @@ def extract_structural_link_features(links):
             except Exception:
                 pass
 
-        if label and not is_esp:
+        if label:
             url_match = re.search(r"(?:https?://)?([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z0-9][-a-zA-Z0-9.]*)", label)
             if url_match:
                 disp_str = url_match.group(1).rstrip(".,;!?)")
@@ -542,7 +543,7 @@ def choose_oof_threshold(labels, oof_probabilities, ham_probabilities=(), target
 class CalibratedStackingClassifier:
     """
     Calibrated stacking meta-learner combining calibrated lexical TF-IDF probability,
-    dense semantic SVD probability, domain-agnostic structural signals, and linkless regime features.
+    lexical SVD probability, domain-agnostic structural signals, and linkless regime features.
     """
     def __init__(self, base_text_pipeline=None, dense_text_pipeline=None, meta_penalty=4.0):
         self.base_text_pipeline = base_text_pipeline or make_pipeline(
@@ -606,88 +607,51 @@ class CalibratedStackingClassifier:
         return np.column_stack(cols)
 
     def fit_and_tune_oof(self, fit_rows, y_fit, cal_rows, y_cal, ham_rows=(), n_splits=5, target_fpr_sweep=(0.02, 0.025, 0.03, 0.035)):
-        """
-        Train using Stratified K-Fold OOF validation to select a robust threshold across sweeps.
-        """
-        all_rows = list(fit_rows) + list(cal_rows)
-        all_y = np.r_[y_fit, y_cal]
+        """Fit meta features on held-out groups, calibrate and tune on separate validation groups."""
+        y_fit, y_cal = np.asarray(y_fit), np.asarray(y_cal)
+        if set(y_fit) != {0, 1} or set(y_cal) != {0, 1}:
+            raise ValueError("Both fit and validation need legitimate and phishing examples.")
+        groups = np.array(template_groups([(normalized_key(r),) for r in [*fit_rows, *cal_rows]]))
+        fit_groups, val_groups = np.split(groups, [len(fit_rows)])
+        if set(fit_groups) & set(val_groups):
+            raise ValueError("A template group occurs in both fit and validation.")
+        train_text = np.array([model_text(r.body, r.subject) for r in fit_rows])
+        val_text = np.array([model_text(r.body, r.subject) for r in cal_rows])
+        calibration, tune = next(StratifiedGroupKFold(2, shuffle=True, random_state=27)
+                                 .split(val_text, y_cal, val_groups))
+        if min(Counter(y_cal[calibration]).values()) < 2 or len(set(y_cal[calibration])) != 2 or len(set(y_cal[tune])) != 2:
+            raise ValueError("Validation requires multiple independent groups of each label.")
 
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-        oof_meta_probs = np.zeros(len(all_rows))
+        def calibrated(pipeline, indexes):
+            trained = clone(pipeline).fit(train_text[indexes], y_fit[indexes])
+            return CalibratedClassifierCV(FrozenEstimator(trained), method="sigmoid", cv=2).fit(
+                val_text[calibration], y_cal[calibration])
 
-        text_inputs = [model_text(r.body, r.subject) for r in all_rows]
-
-        for train_idx, val_idx in skf.split(all_rows, all_y):
-            X_tr = [text_inputs[i] for i in train_idx]
-            y_tr = all_y[train_idx]
-            X_va = [text_inputs[i] for i in val_idx]
-
-            # Fold lexical model
-            fold_lex = make_pipeline(word_features(), LinearSVC(C=0.5, class_weight="balanced", random_state=42))
-            fold_lex.fit(X_tr, y_tr)
-            fold_lex_cal = CalibratedClassifierCV(FrozenEstimator(fold_lex), method="sigmoid").fit(X_tr, y_tr)
-
-            # Fold dense semantic model
-            fold_dense = make_dense_semantic_pipeline(n_components=min(50, len(X_tr) - 1))
-            fold_dense.fit(X_tr, y_tr)
-            fold_dense_cal = CalibratedClassifierCV(FrozenEstimator(fold_dense), method="sigmoid").fit(X_tr, y_tr)
-
-            p_lex_va = fold_lex_cal.predict_proba(X_va)[:, 1]
-            p_dense_va = fold_dense_cal.predict_proba(X_va)[:, 1]
-            rows_val = [all_rows[i] for i in val_idx]
-            meta_X_val = self._extract_meta_features(p_lex_va, p_dense_va, rows_val)
-
-            # Fit intermediate meta learner on train
-            p_lex_tr = fold_lex_cal.predict_proba(X_tr)[:, 1]
-            p_dense_tr = fold_dense_cal.predict_proba(X_tr)[:, 1]
-            rows_tr = [all_rows[i] for i in train_idx]
-            meta_X_tr = self._extract_meta_features(p_lex_tr, p_dense_tr, rows_tr)
-
-            fold_meta = LogisticRegression(C=0.5, class_weight={0: self.meta_penalty, 1: 1.0}, max_iter=500, random_state=42)
-            fold_meta.fit(meta_X_tr, y_tr)
-            oof_meta_probs[val_idx] = fold_meta.predict_proba(meta_X_val)[:, 1]
-
-        # Fit final full text models
-        X_fit_text = [model_text(r.body, r.subject) for r in fit_rows]
-        self.base_text_pipeline.fit(X_fit_text, y_fit)
-        self.dense_text_pipeline.fit(X_fit_text, y_fit)
-
-        X_cal_text = [model_text(r.body, r.subject) for r in cal_rows]
-        self.calibrated_lexical_model = CalibratedClassifierCV(FrozenEstimator(self.base_text_pipeline), method="sigmoid")
-        self.calibrated_lexical_model.fit(X_cal_text, y_cal)
-
-        self.calibrated_dense_model = CalibratedClassifierCV(FrozenEstimator(self.dense_text_pipeline), method="sigmoid")
-        self.calibrated_dense_model.fit(X_cal_text, y_cal)
-
-        # Fit final meta-learner
-        p_lex_cal = self.calibrated_lexical_model.predict_proba(X_cal_text)[:, 1]
-        p_dense_cal = self.calibrated_dense_model.predict_proba(X_cal_text)[:, 1]
-        meta_cal = self._extract_meta_features(p_lex_cal, p_dense_cal, cal_rows)
-        self.meta_learner.fit(meta_cal, y_cal)
-
-        ham_meta_probs = np.array([])
-        if ham_rows:
-            ham_meta_probs = self.predict_proba(ham_rows)
-
-        # Sweep across target OOF FPRs
-        sweep_results = {}
-        for target in target_fpr_sweep:
-            th = choose_oof_threshold(all_y, oof_meta_probs, ham_meta_probs, target_fpr=target)
-            alerts = oof_meta_probs > th
-            fpr = float(np.mean(alerts[all_y == 0])) if np.sum(all_y == 0) > 0 else 0.0
-            recall = float(np.mean(alerts[all_y == 1])) if np.sum(all_y == 1) > 0 else 0.0
-            sweep_results[str(target)] = {"threshold": float(th), "oof_fpr": fpr, "oof_recall": recall}
-
-        # Select the cutoff targeting 0.025 (2.5%) for robust safety margin
-        self.threshold = sweep_results.get("0.025", {}).get("threshold", 0.5)
-        self.sweep_results = sweep_results
+        oof = np.empty((len(fit_rows), 2))
+        folds = StratifiedGroupKFold(n_splits, shuffle=True, random_state=42)
+        for train, held in folds.split(train_text, y_fit, fit_groups):
+            for column, pipeline in enumerate((self.base_text_pipeline, self.dense_text_pipeline)):
+                oof[held, column] = calibrated(pipeline, train).predict_proba(train_text[held])[:, 1]
+        self.meta_learner.fit(self._extract_meta_features(oof[:, 0], oof[:, 1], fit_rows), y_fit)
+        indexes = np.arange(len(y_fit))
+        self.calibrated_lexical_model = calibrated(self.base_text_pipeline, indexes)
+        self.calibrated_dense_model = calibrated(self.dense_text_pipeline, indexes)
+        scores = self.predict_proba([cal_rows[i] for i in tune])
+        guards = self.predict_proba(ham_rows) if len(ham_rows) else []
+        self.sweep_results = {}
+        for budget in target_fpr_sweep:
+            cut = choose_oof_threshold(y_cal[tune], scores, guards, target_fpr=budget)
+            selected = scores > cut
+            self.sweep_results[str(budget)] = {"threshold": cut,
+                "validation_fpr": float(selected[y_cal[tune] == 0].mean()),
+                "validation_recall": float(selected[y_cal[tune] == 1].mean())}
+        self.threshold = choose_oof_threshold(y_cal[tune], scores, guards, target_fpr=OOF_TARGET_FPR)
         return self.threshold
 
     def predict_proba(self, rows):
         text_inputs = [model_text(r.body, r.subject) for r in rows]
         if self.calibrated_lexical_model is None:
-            p_lex = self.base_text_pipeline.predict_proba(text_inputs)[:, 1]
-            p_dense = p_lex
+            raise ValueError("Fit the stacking model before requesting predictions.")
         else:
             p_lex = self.calibrated_lexical_model.predict_proba(text_inputs)[:, 1]
             p_dense = self.calibrated_dense_model.predict_proba(text_inputs)[:, 1]
