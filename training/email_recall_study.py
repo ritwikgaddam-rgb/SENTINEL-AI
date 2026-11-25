@@ -10,6 +10,7 @@ from hashlib import file_digest
 import ipaddress
 import json
 import mailbox
+import math
 import os
 from pathlib import Path
 import re
@@ -22,12 +23,13 @@ import numpy as np
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
+from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.frozen import FrozenEstimator
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, precision_recall_curve
 from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import FeatureUnion, make_pipeline
 from sklearn.preprocessing import MaxAbsScaler
 from sklearn.svm import LinearSVC
 
@@ -70,6 +72,217 @@ OPEN_REDIRECT_PARAMS = frozenset({
     "url", "redirect", "redirect_uri", "redirect_url", "next", "dest", "destination",
     "target", "return", "return_url", "returnto", "r", "link", "goto", "uri",
 })
+
+HIGH_VALUE_DOMAINS = frozenset({
+    "paypal.com", "microsoft.com", "apple.com", "google.com", "amazon.com",
+    "netflix.com", "chase.com", "wellsfargo.com", "bankofamerica.com",
+    "docusign.net", "dropbox.com", "adobe.com", "meta.com", "facebook.com",
+    "instagram.com", "linkedin.com", "twitter.com", "x.com"
+})
+
+HIGH_RISK_TLDS = frozenset({
+    ".xyz", ".top", ".click", ".icu", ".online", ".site", ".cfd", ".work",
+    ".buzz", ".monster", ".fit", ".rest", ".club", ".bar", ".wiki", ".vip",
+    ".gq", ".ml", ".cf", ".tk", ".ga"
+})
+
+ACTION_ANCHOR_PATTERNS = re.compile(
+    r"\b(?:verify|sign in|log in|view document|review invoice|update payment|"
+    r"unlock account|confirm identity|access document|download invoice|"
+    r"pay now|click here|open link|authenticate|reset password)\b", re.I
+)
+
+CALLBACK_PHISHING_PATTERN = re.compile(
+    r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"
+)
+
+CALLBACK_KEYWORDS = re.compile(
+    r"\b(?:call|toll[- ]free|helpline|support line|cancel(?:lation)?|refund|charged|"
+    r"invoice|subscription|geek squad|mcafee|norton|paypal support|helpdesk)\b", re.I
+)
+
+WIRE_URGENCY_PATTERN = re.compile(
+    r"\b(?:wire transfer|direct deposit|payroll|gift card|gift cards|bank details|"
+    r"remittance|swift code|ach transfer|routing number|same[- ]day transfer)\b", re.I
+)
+
+ATTACHMENT_LURE_PATTERN = re.compile(
+    r"\b(?:attached (?:invoice|document|file|receipt|remittance|statement|pdf)|"
+    r"see attached|review attached|find attached|attachment)\b", re.I
+)
+
+
+def levenshtein_similarity(s1, s2):
+    m, n = len(s1), len(s2)
+    if m == 0 or n == 0:
+        return 0.0
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            cost = 0 if s1[i-1] == s2[j-1] else 1
+            dp[i][j] = min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + cost)
+    dist = dp[m][n]
+    return 1.0 - (dist / max(m, n))
+
+
+def domain_entropy(domain):
+    if not domain:
+        return 0.0
+    counts = Counter(domain)
+    n = len(domain)
+    return -sum((c / n) * math.log2(c / n) for c in counts.values())
+
+
+def domain_lexical_risk(domain):
+    """
+    Computes typosquat similarity to high-value targets, Shannon entropy,
+    digit-to-letter ratio, hyphen count, and high-risk TLD indicator.
+    """
+    if not domain:
+        return {
+            "is_typosquat": 0,
+            "max_target_sim": 0.0,
+            "domain_entropy": 0.0,
+            "digit_letter_ratio": 0.0,
+            "hyphen_count": 0,
+            "high_risk_tld": 0,
+        }
+
+    domain_lower = domain.lower().strip()
+    digits = sum(c.isdigit() for c in domain_lower)
+    letters = sum(c.isalpha() for c in domain_lower)
+    digit_letter_ratio = digits / max(letters, 1)
+    hyphen_count = domain_lower.count("-")
+    has_high_risk_tld = int(any(domain_lower.endswith(tld) for tld in HIGH_RISK_TLDS))
+    ent = domain_entropy(domain_lower)
+
+    max_sim = 0.0
+    is_typosquat = 0
+    for target in HIGH_VALUE_DOMAINS:
+        sim = levenshtein_similarity(domain_lower, target)
+        if sim > max_sim:
+            max_sim = sim
+        if 0.82 <= sim < 1.0:
+            is_typosquat = 1
+
+    return {
+        "is_typosquat": is_typosquat,
+        "max_target_sim": round(max_sim, 3),
+        "domain_entropy": round(ent, 3),
+        "digit_letter_ratio": round(digit_letter_ratio, 3),
+        "hyphen_count": hyphen_count,
+        "high_risk_tld": has_high_risk_tld,
+    }
+
+
+def extract_domain_agnostic_features(sender="", links=(), subject="", reply_to="", body=""):
+    """
+    Extract domain-agnostic interaction and lexical features independent of static brand lists.
+    """
+    name, address = parseaddr(sender or "")
+    sender_domain = address.rpartition("@")[2].lower().strip()
+    sender_reg = registrable(sender_domain) if sender_domain else ""
+    is_freemail = int(sender_reg in FREE_WEBMAIL_DOMAINS or sender_domain in FREE_WEBMAIL_DOMAINS)
+
+    sender_lex = domain_lexical_risk(sender_reg)
+    typosquat_detected = sender_lex["is_typosquat"]
+    any_high_risk_tld = sender_lex["high_risk_tld"]
+    max_domain_entropy = sender_lex["domain_entropy"]
+    max_digit_letter_ratio = sender_lex["digit_letter_ratio"]
+    max_hyphen_count = sender_lex["hyphen_count"]
+
+    has_external_non_esp_link = 0
+    sender_vs_href_mismatch = 0
+    has_action_anchor = 0
+
+    for item in links:
+        url = item["url"] if isinstance(item, dict) else str(item)
+        label = item.get("label", "") if isinstance(item, dict) else ""
+        if not url:
+            continue
+        try:
+            _, host, _ = split_url(url, assume_https=True)
+        except (ValueError, UnicodeError):
+            continue
+
+        host_reg = registrable(host)
+        is_esp = is_esp_domain(host)
+
+        if label and ACTION_ANCHOR_PATTERNS.search(label):
+            has_action_anchor = 1
+
+        if not is_esp:
+            has_external_non_esp_link = 1
+            if sender_reg and host_reg and sender_reg != host_reg:
+                sender_vs_href_mismatch = 1
+
+            link_lex = domain_lexical_risk(host_reg)
+            if link_lex["is_typosquat"]:
+                typosquat_detected = 1
+            if link_lex["high_risk_tld"]:
+                any_high_risk_tld = 1
+            max_domain_entropy = max(max_domain_entropy, link_lex["domain_entropy"])
+            max_digit_letter_ratio = max(max_digit_letter_ratio, link_lex["digit_letter_ratio"])
+            max_hyphen_count = max(max_hyphen_count, link_lex["hyphen_count"])
+
+    free_webmail_with_external_cta = int(is_freemail and (has_external_non_esp_link or has_action_anchor))
+
+    words = len(re.findall(r"\b\w+\b", body))
+    link_density = len(links) / max(words, 10)
+
+    return {
+        "sender_vs_href_mismatch": sender_vs_href_mismatch,
+        "free_webmail_with_external_cta": free_webmail_with_external_cta,
+        "has_action_anchor": has_action_anchor,
+        "has_external_non_esp_link": has_external_non_esp_link,
+        "typosquat_detected": typosquat_detected,
+        "any_high_risk_tld": any_high_risk_tld,
+        "max_domain_entropy": round(max_domain_entropy, 3),
+        "max_digit_letter_ratio": round(max_digit_letter_ratio, 3),
+        "max_hyphen_count": max_hyphen_count,
+        "link_density": round(link_density, 3),
+    }
+
+
+def extract_linkless_social_engineering_features(body="", subject="", links=()):
+    """
+    Extract callback phishing, wire urgency, and attachment lures for linkless regime.
+    """
+    text = f"{subject}\n{body}"
+    has_phone = bool(CALLBACK_PHISHING_PATTERN.search(text))
+    has_callback_words = bool(CALLBACK_KEYWORDS.search(text))
+    callback_phishing_signal = int(has_phone and has_callback_words)
+
+    wire_urgency_signal = int(bool(WIRE_URGENCY_PATTERN.search(text)))
+    attachment_lure_signal = int(bool(ATTACHMENT_LURE_PATTERN.search(text)))
+    regime_no_links = int(len(links) == 0)
+
+    return {
+        "callback_phishing_signal": callback_phishing_signal,
+        "wire_urgency_signal": wire_urgency_signal,
+        "attachment_lure_signal": attachment_lure_signal,
+        "regime_no_links": regime_no_links,
+    }
+
+
+def make_dense_semantic_pipeline(n_components=100):
+    """
+    Compact subword/character + word TF-IDF Latent Semantic Analysis pipeline.
+    Captures dense social-engineering topic and intent representation without relying on exact tokens.
+    """
+    text_union = FeatureUnion([
+        ("word", TfidfVectorizer(ngram_range=(1, 2), min_df=2, sublinear_tf=True, max_features=15000)),
+        ("char", TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=3, sublinear_tf=True, max_features=25000)),
+    ])
+    return make_pipeline(
+        text_union,
+        TruncatedSVD(n_components=n_components, random_state=42),
+        LogisticRegression(C=1.0, max_iter=500, random_state=42),
+    )
 
 
 def is_esp_domain(host):
@@ -220,7 +433,7 @@ def extract_sender_display_features(sender="", reply_to=""):
 
 def extract_privacy_safe_features(row_or_body, sender="", links=(), subject="", reply_to=""):
     """
-    Combine link and sender structural features for a message or row.
+    Combine link, sender, domain-agnostic, and linkless structural features for a message or row.
     """
     if isinstance(row_or_body, Mail):
         body = row_or_body.body
@@ -233,6 +446,8 @@ def extract_privacy_safe_features(row_or_body, sender="", links=(), subject="", 
 
     feat = extract_structural_link_features(links)
     feat.update(extract_sender_display_features(sender, reply_to))
+    feat.update(extract_domain_agnostic_features(sender, links, subject, reply_to, body))
+    feat.update(extract_linkless_social_engineering_features(body, subject, links))
     feat.update(
         subject_present=int(bool(subject)),
         sender_present=int(bool(sender)),
@@ -326,12 +541,16 @@ def choose_oof_threshold(labels, oof_probabilities, ham_probabilities=(), target
 
 class CalibratedStackingClassifier:
     """
-    Calibrated stacking meta-learner combining calibrated text probability
-    with privacy-safe structural link and sender signals.
+    Calibrated stacking meta-learner combining calibrated lexical TF-IDF probability,
+    dense semantic SVD probability, domain-agnostic structural signals, and linkless regime features.
     """
-    def __init__(self, base_text_pipeline, meta_penalty=4.0):
-        self.base_text_pipeline = base_text_pipeline
-        self.calibrated_text_model = None
+    def __init__(self, base_text_pipeline=None, dense_text_pipeline=None, meta_penalty=4.0):
+        self.base_text_pipeline = base_text_pipeline or make_pipeline(
+            word_features(), LinearSVC(C=0.5, class_weight="balanced", random_state=42)
+        )
+        self.dense_text_pipeline = dense_text_pipeline or make_dense_semantic_pipeline(n_components=100)
+        self.calibrated_lexical_model = None
+        self.calibrated_dense_model = None
         self.meta_penalty = meta_penalty
         self.meta_learner = LogisticRegression(
             C=0.5,
@@ -341,34 +560,54 @@ class CalibratedStackingClassifier:
         )
         self.threshold = 0.5
         self.feature_names = [
-            "text_prob", "has_links", "anchor_url_mismatch", "has_raw_ip",
-            "has_punycode", "has_deep_subdomain", "has_open_redirect",
-            "has_tunnel_host", "is_esp_safelisted", "url_obfuscation_any",
-            "display_brand_mismatch", "sender_is_freemail", "reply_to_mismatch"
+            "lexical_prob", "dense_prob", "has_links", "regime_no_links",
+            "anchor_url_mismatch", "sender_vs_href_mismatch", "free_webmail_with_external_cta",
+            "has_action_anchor", "typosquat_detected", "any_high_risk_tld",
+            "url_obfuscation_any", "is_esp_safelisted", "display_brand_mismatch",
+            "sender_is_freemail", "reply_to_mismatch", "callback_phishing_signal",
+            "wire_urgency_signal", "attachment_lure_signal",
+            "regime_no_links_x_dense", "regime_no_links_x_callback",
+            "links_present_x_mismatch", "links_present_x_freemail_cta"
         ]
 
-    def _extract_meta_features(self, text_probs, rows):
+    def _extract_meta_features(self, lexical_probs, dense_probs, rows):
         feats = [extract_privacy_safe_features(r) for r in rows]
+        regime_no_links = np.array([f["regime_no_links"] for f in feats])
+        links_present = 1.0 - regime_no_links
+        sender_mismatch = np.array([f["sender_vs_href_mismatch"] for f in feats])
+        freemail_cta = np.array([f["free_webmail_with_external_cta"] for f in feats])
+        callback = np.array([f["callback_phishing_signal"] for f in feats])
+
         cols = [
-            text_probs,
+            lexical_probs,
+            dense_probs,
             np.array([f["has_links"] for f in feats]),
+            regime_no_links,
             np.array([f["anchor_url_mismatch"] for f in feats]),
-            np.array([f["has_raw_ip"] for f in feats]),
-            np.array([f["has_punycode"] for f in feats]),
-            np.array([f["has_deep_subdomain"] for f in feats]),
-            np.array([f["has_open_redirect"] for f in feats]),
-            np.array([f["has_tunnel_host"] for f in feats]),
-            np.array([f["is_esp_safelisted"] for f in feats]),
+            sender_mismatch,
+            freemail_cta,
+            np.array([f["has_action_anchor"] for f in feats]),
+            np.array([f["typosquat_detected"] for f in feats]),
+            np.array([f["any_high_risk_tld"] for f in feats]),
             np.array([f["url_obfuscation_any"] for f in feats]),
+            np.array([f["is_esp_safelisted"] for f in feats]),
             np.array([f["display_brand_mismatch"] for f in feats]),
             np.array([f["sender_is_freemail"] for f in feats]),
             np.array([f["reply_to_mismatch"] for f in feats]),
+            callback,
+            np.array([f["wire_urgency_signal"] for f in feats]),
+            np.array([f["attachment_lure_signal"] for f in feats]),
+            # Regime interaction terms
+            regime_no_links * dense_probs,
+            regime_no_links * callback,
+            links_present * sender_mismatch,
+            links_present * freemail_cta,
         ]
         return np.column_stack(cols)
 
-    def fit_and_tune_oof(self, fit_rows, y_fit, cal_rows, y_cal, ham_rows=(), n_splits=5):
+    def fit_and_tune_oof(self, fit_rows, y_fit, cal_rows, y_cal, ham_rows=(), n_splits=5, target_fpr_sweep=(0.02, 0.025, 0.03, 0.035)):
         """
-        Train using Stratified K-Fold OOF validation to select a robust threshold.
+        Train using Stratified K-Fold OOF validation to select a robust threshold across sweeps.
         """
         all_rows = list(fit_rows) + list(cal_rows)
         all_y = np.r_[y_fit, y_cal]
@@ -383,52 +622,76 @@ class CalibratedStackingClassifier:
             y_tr = all_y[train_idx]
             X_va = [text_inputs[i] for i in val_idx]
 
-            fold_base = make_pipeline(word_features(), LinearSVC(C=0.5, class_weight="balanced", random_state=42))
-            fold_base.fit(X_tr, y_tr)
-            fold_cal = CalibratedClassifierCV(FrozenEstimator(fold_base), method="sigmoid")
-            fold_cal.fit(X_tr, y_tr)
+            # Fold lexical model
+            fold_lex = make_pipeline(word_features(), LinearSVC(C=0.5, class_weight="balanced", random_state=42))
+            fold_lex.fit(X_tr, y_tr)
+            fold_lex_cal = CalibratedClassifierCV(FrozenEstimator(fold_lex), method="sigmoid").fit(X_tr, y_tr)
 
-            p_val = fold_cal.predict_proba(X_va)[:, 1]
+            # Fold dense semantic model
+            fold_dense = make_dense_semantic_pipeline(n_components=min(50, len(X_tr) - 1))
+            fold_dense.fit(X_tr, y_tr)
+            fold_dense_cal = CalibratedClassifierCV(FrozenEstimator(fold_dense), method="sigmoid").fit(X_tr, y_tr)
+
+            p_lex_va = fold_lex_cal.predict_proba(X_va)[:, 1]
+            p_dense_va = fold_dense_cal.predict_proba(X_va)[:, 1]
             rows_val = [all_rows[i] for i in val_idx]
-            meta_X_val = self._extract_meta_features(p_val, rows_val)
+            meta_X_val = self._extract_meta_features(p_lex_va, p_dense_va, rows_val)
 
             # Fit intermediate meta learner on train
-            p_tr = fold_cal.predict_proba(X_tr)[:, 1]
+            p_lex_tr = fold_lex_cal.predict_proba(X_tr)[:, 1]
+            p_dense_tr = fold_dense_cal.predict_proba(X_tr)[:, 1]
             rows_tr = [all_rows[i] for i in train_idx]
-            meta_X_tr = self._extract_meta_features(p_tr, rows_tr)
+            meta_X_tr = self._extract_meta_features(p_lex_tr, p_dense_tr, rows_tr)
 
             fold_meta = LogisticRegression(C=0.5, class_weight={0: self.meta_penalty, 1: 1.0}, max_iter=500, random_state=42)
             fold_meta.fit(meta_X_tr, y_tr)
             oof_meta_probs[val_idx] = fold_meta.predict_proba(meta_X_val)[:, 1]
 
-        # Fit final full text base model and calibrate on cal_rows
+        # Fit final full text models
         X_fit_text = [model_text(r.body, r.subject) for r in fit_rows]
         self.base_text_pipeline.fit(X_fit_text, y_fit)
-        X_cal_text = [model_text(r.body, r.subject) for r in cal_rows]
-        self.calibrated_text_model = CalibratedClassifierCV(FrozenEstimator(self.base_text_pipeline), method="sigmoid")
-        self.calibrated_text_model.fit(X_cal_text, y_cal)
+        self.dense_text_pipeline.fit(X_fit_text, y_fit)
 
-        # Fit final meta-learner on calibration set or combined set
-        p_cal = self.calibrated_text_model.predict_proba(X_cal_text)[:, 1]
-        meta_cal = self._extract_meta_features(p_cal, cal_rows)
+        X_cal_text = [model_text(r.body, r.subject) for r in cal_rows]
+        self.calibrated_lexical_model = CalibratedClassifierCV(FrozenEstimator(self.base_text_pipeline), method="sigmoid")
+        self.calibrated_lexical_model.fit(X_cal_text, y_cal)
+
+        self.calibrated_dense_model = CalibratedClassifierCV(FrozenEstimator(self.dense_text_pipeline), method="sigmoid")
+        self.calibrated_dense_model.fit(X_cal_text, y_cal)
+
+        # Fit final meta-learner
+        p_lex_cal = self.calibrated_lexical_model.predict_proba(X_cal_text)[:, 1]
+        p_dense_cal = self.calibrated_dense_model.predict_proba(X_cal_text)[:, 1]
+        meta_cal = self._extract_meta_features(p_lex_cal, p_dense_cal, cal_rows)
         self.meta_learner.fit(meta_cal, y_cal)
 
-        # Compute ham probabilities if ham rows are provided
         ham_meta_probs = np.array([])
         if ham_rows:
             ham_meta_probs = self.predict_proba(ham_rows)
 
-        self.threshold = choose_oof_threshold(all_y, oof_meta_probs, ham_meta_probs, target_fpr=OOF_TARGET_FPR)
+        # Sweep across target OOF FPRs
+        sweep_results = {}
+        for target in target_fpr_sweep:
+            th = choose_oof_threshold(all_y, oof_meta_probs, ham_meta_probs, target_fpr=target)
+            alerts = oof_meta_probs > th
+            fpr = float(np.mean(alerts[all_y == 0])) if np.sum(all_y == 0) > 0 else 0.0
+            recall = float(np.mean(alerts[all_y == 1])) if np.sum(all_y == 1) > 0 else 0.0
+            sweep_results[str(target)] = {"threshold": float(th), "oof_fpr": fpr, "oof_recall": recall}
+
+        # Select the cutoff targeting 0.025 (2.5%) for robust safety margin
+        self.threshold = sweep_results.get("0.025", {}).get("threshold", 0.5)
+        self.sweep_results = sweep_results
         return self.threshold
 
     def predict_proba(self, rows):
         text_inputs = [model_text(r.body, r.subject) for r in rows]
-        if self.calibrated_text_model is None:
-            # Fallback if uncalibrated
-            p_text = self.base_text_pipeline.predict_proba(text_inputs)[:, 1]
+        if self.calibrated_lexical_model is None:
+            p_lex = self.base_text_pipeline.predict_proba(text_inputs)[:, 1]
+            p_dense = p_lex
         else:
-            p_text = self.calibrated_text_model.predict_proba(text_inputs)[:, 1]
-        meta_X = self._extract_meta_features(p_text, rows)
+            p_lex = self.calibrated_lexical_model.predict_proba(text_inputs)[:, 1]
+            p_dense = self.calibrated_dense_model.predict_proba(text_inputs)[:, 1]
+        meta_X = self._extract_meta_features(p_lex, p_dense, rows)
         return self.meta_learner.predict_proba(meta_X)[:, 1]
 
     def predict(self, rows):

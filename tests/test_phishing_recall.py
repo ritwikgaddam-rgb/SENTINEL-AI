@@ -5,9 +5,11 @@ import numpy as np
 
 from backend import server
 from training.email_recall_study import (
-    Mail, audit_current_errors, choose_oof_threshold, choose_threshold,
-    extract_privacy_safe_features, extract_sender_display_features,
-    extract_structural_link_features, make_partitions
+    CalibratedStackingClassifier, Mail, audit_current_errors, choose_oof_threshold,
+    choose_threshold, domain_lexical_risk, extract_domain_agnostic_features,
+    extract_linkless_social_engineering_features, extract_privacy_safe_features,
+    extract_sender_display_features, extract_structural_link_features,
+    levenshtein_similarity, make_dense_semantic_pipeline, make_partitions
 )
 
 BENIGN = (
@@ -171,4 +173,77 @@ class StructuralFeatureAndRecallTests(unittest.TestCase):
         self.assertEqual(audit["false_positives"]["by_links"]["0_links"], 1)
         self.assertEqual(audit["false_negatives"]["count"], 1)
         self.assertEqual(audit["false_negatives"]["by_sender"]["freemail"], 1)
+
+    def test_sender_vs_href_mismatch_and_free_webmail_cta(self):
+        links = [{"url": "https://secure-invoice-portal.net/auth", "label": "View Document"}]
+        sender = "Accounting Dept <billing.dept29@gmail.com>"
+        feats = extract_domain_agnostic_features(sender=sender, links=links, body="Please view the document.")
+        self.assertEqual(feats["sender_vs_href_mismatch"], 1)
+        self.assertEqual(feats["free_webmail_with_external_cta"], 1)
+        self.assertEqual(feats["has_action_anchor"], 1)
+        self.assertGreater(feats["link_density"], 0)
+
+        # Same domain matches without mismatch
+        legit_sender = "Support <support@mycorp.com>"
+        legit_links = [{"url": "https://mycorp.com/billing", "label": "Review Invoice"}]
+        legit_feats = extract_domain_agnostic_features(sender=legit_sender, links=legit_links)
+        self.assertEqual(legit_feats["sender_vs_href_mismatch"], 0)
+        self.assertEqual(legit_feats["free_webmail_with_external_cta"], 0)
+
+    def test_typosquatting_and_lexical_risk(self):
+        self.assertGreaterEqual(levenshtein_similarity("micros0ft.com", "microsoft.com"), 0.82)
+        self.assertGreaterEqual(levenshtein_similarity("paypa1.com", "paypal.com"), 0.82)
+        self.assertGreaterEqual(levenshtein_similarity("arnazon.com", "amazon.com"), 0.81)
+
+        typo_risk = domain_lexical_risk("micros0ft.com")
+        self.assertEqual(typo_risk["is_typosquat"], 1)
+        self.assertGreater(typo_risk["max_target_sim"], 0.82)
+
+        tld_risk = domain_lexical_risk("account-verify.xyz")
+        self.assertEqual(tld_risk["high_risk_tld"], 1)
+        self.assertGreater(tld_risk["hyphen_count"], 0)
+
+        normal_risk = domain_lexical_risk("normaluniversity.edu")
+        self.assertEqual(normal_risk["is_typosquat"], 0)
+        self.assertEqual(normal_risk["high_risk_tld"], 0)
+
+    def test_linkless_social_engineering_signals(self):
+        callback_phish = "Your Geek Squad subscription charged $499. Call toll-free 1-800-555-0199 to cancel."
+        feats_cb = extract_linkless_social_engineering_features(body=callback_phish, links=())
+        self.assertEqual(feats_cb["callback_phishing_signal"], 1)
+        self.assertEqual(feats_cb["regime_no_links"], 1)
+
+        wire_phish = "URGENT: Please process a same-day wire transfer to the updated bank details."
+        feats_wire = extract_linkless_social_engineering_features(body=wire_phish, links=())
+        self.assertEqual(feats_wire["wire_urgency_signal"], 1)
+
+        attachment_phish = "Please find the attached invoice statement for your review."
+        feats_att = extract_linkless_social_engineering_features(body=attachment_phish, links=())
+        self.assertEqual(feats_att["attachment_lure_signal"], 1)
+
+        benign_advice = "Never share your password or OTP with anyone. Keep it private."
+        feats_benign = extract_linkless_social_engineering_features(body=benign_advice, links=())
+        self.assertEqual(feats_benign["callback_phishing_signal"], 0)
+        self.assertEqual(feats_benign["wire_urgency_signal"], 0)
+
+    def test_dense_semantic_pipeline_and_stacking(self):
+        pipe = make_dense_semantic_pipeline(n_components=5)
+        texts = [
+            "Urgent payment required for your account invoice",
+            "Verify your credentials and login password immediately",
+            "Hey how are you doing see you at the library",
+            "The science project draft is attached for homework",
+        ]
+        labels = [1, 1, 0, 0]
+        pipe.fit(texts, labels)
+        probs = pipe.predict_proba(texts)[:, 1]
+        self.assertEqual(len(probs), 4)
+        self.assertGreater(probs[0], probs[2])
+
+        rows = [Mail(t, l, "unit_test") for t, l in zip(texts, labels)]
+        stacker = CalibratedStackingClassifier(dense_text_pipeline=pipe)
+        stacker.fit_and_tune_oof(rows[:2], np.array(labels[:2]), rows[2:], np.array(labels[2:]), n_splits=2)
+        preds = stacker.predict(rows)
+        self.assertEqual(len(preds), 4)
+
 
