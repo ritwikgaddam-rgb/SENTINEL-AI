@@ -1,6 +1,6 @@
 # SentinelAI
 
-SentinelAI runs a React browser preview and a Chrome Manifest V3 extension. The Python API performs scans on loopback. Chrome Identity can enable an optional read-only Gmail inbox view in a configured build. Local scans, classification, redaction and review require no API keys.
+SentinelAI runs a React browser preview and a Chrome Manifest V3 extension. The Python API performs scans on loopback. The standard Chrome build includes an optional read-only Gmail inbox view with Google consent. Local scans, classification, redaction and review require no API keys.
 
 ## Install and run
 

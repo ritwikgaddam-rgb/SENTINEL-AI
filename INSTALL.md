@@ -41,14 +41,15 @@ Use a second Command Prompt for the same three npm commands above. Open `http://
 
 ### Gmail and local data
 
-The Gmail overlay uses your existing Gmail tab and its compose panel uses the local backend for privacy checks. The optional Google-connected inbox view in the popup requires a configured build. The public archives omit that configuration.
+The Gmail overlay uses your existing Gmail tab. Its compose panel uses the local backend for privacy checks. The optional Inbox Scanner uses the team's shared Google OAuth client included in the standard Chrome build.
 
-1. In Google Cloud, enable the Gmail API and People API for the project. Configure the OAuth consent screen and authorize the intended test account.
-2. Create a **Chrome Extension** OAuth client for the new unpacked ID **`ljhaekkkeoaajonchnhaaepfcelccbpd`**. Confirm the actual ID under `chrome://extensions` before registering it.
-3. Set `SENTINELAI_GOOGLE_CLIENT_ID` to the new public client ID and run `npm --prefix extension run build` from source. On macOS, prefix the build command with `SENTINELAI_GOOGLE_CLIENT_ID="YOUR_PUBLIC_CLIENT_ID"`. In Windows Command Prompt, run `set "SENTINELAI_GOOGLE_CLIENT_ID=YOUR_PUBLIC_CLIENT_ID"` first.
-4. Reload the extension, refresh Gmail and test sign-in with the authorized account. Keep the configured build separate from the public archives. [Chrome OAuth setup](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth)
+1. From the repository root, run `npm --prefix extension ci` and `npm --prefix extension run build`.
+2. In a Google Chrome profile signed into your Gmail account, open `chrome://extensions` and load `extension/dist` unpacked. If Chrome is already loading that folder, click **Reload**. If it is loading the old ZIP or `dist-gmail` under the same ID, remove that copy before loading `extension/dist`.
+3. Start the local backend. Open **Email Guard → Sign in with Google**, approve read-only Gmail access in Google's consent dialog, then choose **Scan Inbox**. Use a test inbox with non-sensitive messages for rehearsals.
 
-The project owner should retire the Google OAuth client bound to the old extension ID and review or revoke its existing grants. Use a fresh Chrome Web Store item and its public key if the team later publishes a signed distribution. Register OAuth for that item's ID and rebuild the backend source manifest and extension with the same public key. [Chrome extension identity](https://developer.chrome.com/docs/extensions/reference/manifest/key)
+Teammates use their own Google accounts and grant their own consent. The Google Cloud project owner manages the shared Chrome Extension client for Item ID `ljhaekkkeoaajonchnhaaepfcelccbpd`. If the project is in **External → Testing**, the owner adds each teammate under **Audience → Test users**. The project needs **Gmail API** and the `gmail.readonly` scope in **Data Access**. Managed Workspace accounts may also need administrator approval. [Chrome OAuth setup](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth), [Google Auth Platform audience](https://support.google.com/cloud/answer/15549945)
+
+If Chrome still says the build needs configuration, confirm it is loading the newly rebuilt `extension/dist`. The original v1.0.1 ZIP predates the shared OAuth configuration. The manifest contains a public client ID and the replacement public key. Google handles credentials and consent, and inbox analysis stays on the loopback backend. The project owner should retire the OAuth client for the old extension ID and review its existing grants. [Chrome extension identity](https://developer.chrome.com/docs/extensions/reference/manifest/key)
 
 ### SQLite and threat review
 

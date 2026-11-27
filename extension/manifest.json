@@ -41,12 +41,21 @@
   "permissions": [
     "storage",
     "activeTab",
-    "contextMenus"
+    "contextMenus",
+    "identity"
   ],
+  "oauth2": {
+    "client_id": "209983686122-p3tt8l4m85c9efp6r57hnmq5tmh4ci2q.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.readonly"
+    ]
+  },
   "host_permissions": [
     "http://127.0.0.1:8000/*",
     "http://localhost:8000/*",
-    "https://mail.google.com/*"
+    "https://mail.google.com/*",
+    "https://gmail.googleapis.com/*",
+    "https://oauth2.googleapis.com/*"
   ],
   "web_accessible_resources": [
     {

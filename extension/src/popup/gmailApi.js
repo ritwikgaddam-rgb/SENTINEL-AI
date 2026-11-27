@@ -6,7 +6,6 @@ import { localApi } from './localApi';
  */
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
-const PEOPLE_BASE = 'https://people.googleapis.com/v1/people/me';
 
 function googleFetch(url, token) {
   return fetch(url, {
@@ -67,17 +66,6 @@ export async function getTokenSilent() {
 // ─── User Profile ────────────────────────────────────────────────────────────
 
 export async function fetchUserProfile(token) {
-  try {
-    const res = await googleFetch(`${PEOPLE_BASE}?personFields=names,emailAddresses,photos`, token);
-    if (res.ok) {
-      const data = await res.json();
-      const name = data.names?.[0]?.displayName ?? 'Google User';
-      const email = data.emailAddresses?.[0]?.value ?? '';
-      const picture = data.photos?.[0]?.url ?? null;
-      return { name, email, picture };
-    }
-  } catch { /* fall through */ }
-
   const res = await googleFetch(`${GMAIL_BASE}/profile`, token);
   if (!res.ok) throw new Error(`Profile fetch failed: ${res.status}`);
   const data = await res.json();

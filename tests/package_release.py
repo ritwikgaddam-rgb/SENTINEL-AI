@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -65,8 +66,15 @@ def package(bundle, output):
             raise ValueError(f"Stale extension runtime asset: {name}")
     source_manifest = json.loads((ROOT / "extension/manifest.json").read_bytes())
     built_manifest = json.loads((bundle / "manifest.json").read_bytes())
-    if built_manifest != source_manifest or "oauth2" in built_manifest:
-        raise ValueError("The public release requires a clean build without a configured OAuth client.")
+    if built_manifest != source_manifest:
+        raise ValueError("The public release requires a clean build matching the source manifest.")
+    oauth = built_manifest.get("oauth2", {})
+    if (
+        set(oauth) != {"client_id", "scopes"}
+        or not re.fullmatch(r"\d+-[a-z0-9]+\.apps\.googleusercontent\.com", oauth["client_id"])
+        or oauth["scopes"] != ["https://www.googleapis.com/auth/gmail.readonly"]
+    ):
+        raise ValueError("The release manifest must contain only the public OAuth client ID and read-only Gmail scope.")
 
     output.mkdir(parents=True, exist_ok=False)
     source_files = [ROOT / name for name in TOP_LEVEL]
