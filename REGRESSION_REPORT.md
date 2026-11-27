@@ -28,7 +28,7 @@ V2 exposes the separate model prediction and probability. Legacy routes keep the
 
 The 175 English PhishFuzzer examples include 87 legitimate and 88 phishing messages. The new policy issued one false alert, two high-risk phishing alerts and three phishing cautions. Among phishing examples, 81 had no clear indicators and two were unscored. Alert recall was 5.68% when both alert levels count. This remains a weak email detector on the benchmark. The saved email artifact performed poorly on false positives and prior text candidates did not improve that tradeoff sufficiently. The local email screen warrants continued evaluation.
 
-The reference URL holdout has 17,473 benign and 19,158 phishing addresses from unseen domain groups. Counting cautions and high-risk alerts together gave 2,126 false alerts (12.17%) and 16,837 detected phishing URLs (87.89% recall). Six benign and 298 phishing URLs received high-risk alerts. This reuses the existing reference benchmark and is not a new post-change external validation. [Detailed counts](.runtime/scoring-privacy-verification/scoring-evaluation.json) · [Earlier model and dataset audit](V2_REPORT.md)
+The reference URL holdout has 17,473 benign and 19,158 phishing addresses from unseen domain groups. Counting cautions and high-risk alerts together gave 2,126 false alerts (12.17%) and 16,837 detected phishing URLs (87.89% recall). Six benign and 298 phishing URLs received high-risk alerts. This reuses the existing reference benchmark and is not a new post-change external validation. Detailed counts are in the private research archive under `research/scoring-privacy-verification/scoring-evaluation.json`. [Archive location](RELEASE_REPORT.md#archived-research) · [Earlier model and dataset audit](V2_REPORT.md)
 
 ## Redaction and compose
 
@@ -57,6 +57,6 @@ All 31 Python tests passed. The installed unpacked extension was tested in dispo
 
 The remaining modified files are backend/scoring.py, backend/server.py, backend/url_advisory.py, backend/database.py, privacy_detector.py, tests/test_v2.py, tests/browser_smoke.py, README.md and this report. The source popup HTML and styling are unchanged. The bundled popup HTML differs only in the rebuilt JavaScript asset name, and the bundled popup CSS matches byte for byte.
 
-[Shield before](.runtime/scoring-privacy-verification/before-shield.png) · [Shield after](.runtime/scoring-privacy-verification/after-shield.png) · [Compose before](.runtime/scoring-privacy-verification/before-collapsed.png) · [Compose after](.runtime/scoring-privacy-verification/after-collapsed.png) · [Expanded pill](.runtime/scoring-privacy-verification/after-expanded.png)
+The Shield and compose screenshots are in the private local research archive under `research/scoring-privacy-verification`. [Archive inventory and location](RELEASE_REPORT.md#archived-research)
 
-Load the tested folder at .runtime/scoring-privacy-build/dist through Chrome's **Load unpacked**. Run the updated Python backend using the [setup instructions](README.md). A previously running backend continues to serve its old code until restarted. The validation ran in temporary databases, so the existing history and running process were left intact.
+Build and load `extension/dist` with the [setup instructions](INSTALL.md) to repeat the browser checks. A previously running backend continues to serve its loaded code until restarted. The validation ran in temporary databases, leaving the existing history and running process intact.

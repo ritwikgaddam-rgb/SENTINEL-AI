@@ -14,7 +14,7 @@ Before source edits, I captured the actual installed unpacked extension and brow
 
 The isolated rebuild used the existing Vite command. Its contents matched the restored dist directory byte for byte. Chrome screenshots were pixel-identical in all ten scene pairs at the same viewport sizes. The popup was 390×580, Gmail was 960×640 and the browser preview was 800×680. The test exercised the navigation transition, theme switches, hover, loading animation, clipboard callback, history, settings, Gmail warning banner, audit drawer and compose redaction. It froze repeating animations at a fixed frame for pixel comparison. Chrome used synthetic data and a deterministic offline font fallback.
 
-[Before screenshots](.runtime/frontend-baseline-63287d9/before.png) · [After screenshots](.runtime/frontend-baseline-63287d9/after.png) · [Protected inventory](.runtime/frontend-baseline-63287d9/inventory.json)
+The before and after screenshots and protected inventory are in the private local research archive under `research/frontend-baseline-63287d9`. [Archive inventory and location](RELEASE_REPORT.md#archived-research)
 
 ## Established model and data issues
 

@@ -5,11 +5,19 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 .mypy_cache/
+.cache/
+.coverage
 
 # Training datasets
 data/
 *.csv
 *.parquet
+*.jsonl
+*.joblib
+!models/email_phishing_model.joblib
+!models/url_context_candidate.joblib
+*.onnx
+*.safetensors
 
 # Secrets
 .env
@@ -26,19 +34,24 @@ client_secret*.json
 *.key
 *.p12
 *.pfx
+*.p8
+*.pkcs8
 # Local environments, generated bundles and SQLite runtime files
 .runtime/
 release/
 node_modules/
 dist/
-extension/dist-gmail/
-extension/build-v2/
+dist-gmail/
+build-v2/
+*.zip
+*.tar
+*.tar.gz
+*.tar.bz2
 *.db
 *.db-*
 *.sqlite
 *.sqlite-*
 *.sqlite3
 *.sqlite3-*
-backend/sentinel_ai.db
 *.log
 *.crx

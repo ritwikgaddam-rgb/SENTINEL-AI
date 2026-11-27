@@ -4,7 +4,7 @@ November 27, 2026 · Release for the November 28 hackathon.
 
 ## Automatic threat collection update
 
-The companion ZIPs are published locally under `.runtime/automatic-threat-collection/release/`. The tagged hackathon artifacts remain available in their original folder. The models, thresholds, extension identity and Gmail OAuth configuration match that release.
+This report records the hackathon checks and model decisions. Build the current extension from source using the [installation guide](INSTALL.md).
 
 The backend initializes history and threat storage independently. Their defaults are `backend/sentinel_ai.db` and `backend/sentinel_threats.db`. The threat migration adds `samples.risk_index`, `samples.indicators`, `samples.model_version` and a per-database `collection.dedup_key`. Older rows and approvals are retained. The old manual opt-in is reset once so users choose whether to enable automatic collection. New automatic rows start pending and unlabelled.
 
@@ -14,11 +14,17 @@ Automatic collection occurs after an existing suspicious verdict. It saves numer
 
 ## Signing-key rotation and publication status
 
-The old private Chrome signing key was committed in `1cb01ab`. Its public half matched the previous release's extension ID. The local copy is quarantined in an ignored directory with restricted permissions. This unpacked release uses a freshly generated public identity. No corresponding private key was saved. The loopback API derives the accepted origin from the new manifest and rejects the retired ID.
+The old private Chrome signing key first appeared as `extension/dist.pem` in `1cb01ab`. The current manifest uses the replacement public key and its shared Chrome OAuth client. The loopback API accepts the replacement origin and rejects the retired ID. The cleanup removed the obsolete local key copy after verifying that it matched the historical Git blob.
 
-The public archives ship without the old Google OAuth client. The Gmail overlay and compose checks retain their local workflow. The optional account-connected inbox requires a new public OAuth client registered for the new ID. The project owner still needs to retire the old Google client and review its grants. See the [installation guide](INSTALL.md) for the setup.
+The key and nine versions of `backend/sentinel_ai.db` remain reachable in Git history. The key-introducing commit is an ancestor of the local `origin/main` tracking ref. The historical databases contained up to 552 scan records and one privacy audit. Aggregate checks found email-like values and URLs with query strings in historical previews. Treat those previews as potentially private. The two active databases are ignored and remain on this machine.
 
-The old key and a historical SQLite file remain reachable in existing Git history. The tag is for local use. Before any push or publication, coordinate retirement of the old Chrome identity, OAuth cleanup and handling of historical Git copies with the repository owner and collaborators. A history rewrite, if approved separately, can change commit and tag hashes. [GitHub sensitive data removal](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
+Before publishing:
+
+1. Have the Google Cloud project owner disable or delete the old Chrome OAuth client, review or revoke its existing grants, and retire any extension distribution that used the old key. Keep the current shared client registered for the replacement extension ID.
+2. Restrict access to copies of the historical SQLite snapshots and determine who had access. Review the affected previews privately for data that needs notification or credential rotation. Keep current databases and necessary backups private.
+3. After separate approval, coordinate a history cleanup covering both paths and affected branches, tags and refs. Check cached pull-request views, forks, clones and backups, and ask GitHub Support about eligible cached references. Have teammates re-clone or rebase onto the cleaned history. Verify the affected blobs are no longer reachable before publishing the cleaned repository. [GitHub sensitive data removal](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
+
+## Model evaluation
 
 The release retains the existing local TF-IDF email classifier, its contextual rule set, and the URL model. The tuned models remain research artifacts. A comparison of 19 word, character, and structural variants is available with its operating points and confusion matrices. [Model evaluation](docs/release-model-evaluation.json)
 
@@ -28,16 +34,13 @@ The November 25 structural baseline reached 51.1% recall with 4.6% false positiv
 
 ## Repository inventory
 
-| Category | Representative files | Release handling |
+| Category | Representative files | Current location |
 |---|---|---|
-| Runtime | Python API, SQLite schema, privacy validation, `extension/src`, brand assets, two active model files and packaged worker parameters | Included with their required resources. |
-| Development | npm lockfile, pinned Python requirements, build scripts and startup scripts | Included. `webpage_extractor.py` is standalone legacy code outside active API dispatch. Its pre-existing edit remains in the development tree. |
-| Testing | Tests, fixtures and synthetic demo text | Included. Browser QA uses disposable profiles and databases. |
-| Research and reproducibility | `training/`, reports and aggregate evaluation JSON | Source and aggregate results included. Five historical model artifacts and local research corpora and checkpoints remain in the development workspace. |
-| Generated and temporary | Tracked virtualenv files, installed Node packages, old generated dist files, macOS metadata and bytecode | Removed from Git’s index with local copies preserved. Styling and official logo source files remain part of the project. |
-| Sensitive | Local signing key, SQLite databases and backups, raw replay messages | Excluded. Git history contains an older private extension signing key and a historical scan database. History was preserved. The old key should be treated as exposed and excluded from future signing. |
-
-The recoverable baseline includes a binary working-tree diff, an archive of the original untracked changes, the original Git status and production model hashes. It is kept privately under `.runtime/hackathon-release/baseline/`. Repository size measurements use both tracked file sizes and disk allocation since Git history and local research artifacts remain on disk.
+| Runtime | Python API, SQLite schema, privacy validation, `extension/src`, brand assets and model files | Checkout. Two Python production models and the offline browser weights remain active. |
+| Development | Lockfiles, build and startup scripts | Checkout. Vite outputs the installed extension to `extension/dist`. |
+| Testing | Tests, fixtures and synthetic demo text | Checkout. Browser QA uses disposable profiles and databases. |
+| Research | `training/`, evaluation reports, datasets and model candidates | Research code and aggregate reports remain in the checkout. Historical model files and local research inputs are in the private archive beside the checkout. |
+| Private data | SQLite databases, backups and raw research replays | Active databases are ignored in the checkout. Backups and replays remain private. |
 
 ## Functional fixes
 
@@ -45,23 +48,20 @@ The web Shield can scan a user-entered address. The extension Shield retains its
 
 See [installation](INSTALL.md), [demonstration](DEMO_GUIDE.md) and the [model handover](COLLABORATIVE_MODEL_REPORT.md).
 
-## Package and verification
-
-The release directory is `.runtime/hackathon-release/final/`. It contains `SentinelAI-Extension.zip`, `SentinelAI-Source.zip` and `SHA256SUMS.txt`. The extension ZIP contains a complete unpacked Chrome build. The source ZIP contains the shared React frontend, backend, two current models, public brand assets, lockfiles, startup scripts, tests and documentation. It omits generated dependency trees and the five legacy artifacts. The source build uses the package lock and verifies the output before distribution. The checksum file records exact sizes and SHA-256 hashes outside the archives.
-
-The tracked file footprint fell from **108.60 MB** across 1,772 paths to approximately **44.73 MB** across 177 paths after removing 1,595 generated paths from the current index. Those counts exclude new untracked source files intended for later review. No Git history was rewritten. Local research, restored builds, and verification environments remain on disk. The two production Joblib artifacts and the packaged inference constants match their baseline SHA-256 hashes. The React and Gmail styles, branding and logos match the previous source.
+## Historical verification
 
 Direct Python runtime pins and the npm lockfile were preserved. `requirements-test.txt` pins the browser harness dependency. The npm build now copies files with Node APIs. Startup isolates dependencies under `.runtime/app-venv`. Fixed local models are loaded before the server accepts requests, so a cold Python import does not consume the frontend's health timeout. Missing or corrupt models still report unavailable, and privacy continues independently. The rehearsal now verifies the optional review database after its first use.
 
 The release was checked on macOS arm64 with Python 3.13, Node 26 and installed Chrome. The Windows scripts have source review only. The quality checks covered 82 Python and 11 Node tests, a clean npm build, synthetic web and installed Gmail workflows, 15 contextual authentication fixtures, compose redaction and undo, and backend recovery with unusable SQLite. The 3,106 labelled replays match Python on verdict and risk index. Private inbox data, live Gmail authorization, Windows execution and native Apple Messages were outside verification. The local React web app and Chrome extension are the release targets in this checkout.
 
-The installed package hit zero HTTP requests in its 50 warm worker scans. Startup and warm scoring metrics, parity by cohort and artifact hashes are recorded alongside the ZIPs in the local verification ledger. Test messages and datasets are excluded from that ledger. The release is prepared locally under `v1.0.0-hackathon`.
+The installed extension made zero HTTP requests in its 50 warm worker scans. Startup and warm scoring metrics, parity by cohort and artifact hashes remain in the local verification ledgers.
 
-Reproduce the lightweight model study from the development checkout with the previously documented screened local archives. The source ZIP contains the research runner and aggregate results. Reproduction also requires the local inputs and saved artifacts that were deliberately excluded.
+## Archived research
+
+The local owner-only folder `../SentinelAI-research-archive-2026-11-27` has an inventory, model files under `models/`, and datasets, checkpoints and screenshots under `research/`. Verification ledgers and private backups have separate folders. To run the legacy URL check, pass the archived model directory explicitly. The historical comparison command accepts the same `--legacy-models` option.
 
 ```sh
-PYTHONHASHSEED=42 OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 \
-  PYTHONPATH=.runtime/handover/finetune-deps \
-  python -m training.release_study .runtime/hackathon-release/model-replay.json \
-  --legacy-csv /path/to/Phishing_Email.csv --public-seeds
+python -m training.test_url_model_v2 --legacy-models ../SentinelAI-research-archive-2026-11-27/models
 ```
+
+For other historical studies, use the input options in `training/` and the archived research files. Older runners that assume `.runtime/` paths can be reproduced in a separate research checkout by restoring the matching subdirectories there.

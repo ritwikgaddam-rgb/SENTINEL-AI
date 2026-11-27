@@ -2,7 +2,7 @@
 
 ## Prepare the demo
 
-Use the tagged release ZIPs from the release directory. For automatic collection use the companion build in `.runtime/automatic-threat-collection/release/`. Follow the [installation guide](INSTALL.md) before going offline. Start the backend on `127.0.0.1:8000` and the web preview on `127.0.0.1:4173`. Use test data and an isolated SQLite database. For the live Gmail overlay, open a fictional message in an authorized demo account. The installed-browser rehearsal supplies a synthetic Gmail page and performs the same local scans and compose actions without account access.
+Build and load `extension/dist` using the [installation guide](INSTALL.md). Start the backend on `127.0.0.1:8000` and the web preview on `127.0.0.1:4173`. Use test data and isolated SQLite databases. For the live Gmail overlay, open a fictional message in an authorized demo account. The installed-browser rehearsal supplies a synthetic Gmail page and performs the same local scans and compose actions without account access.
 
 ## Five-minute demo
 
@@ -48,7 +48,7 @@ The screening index is an evidence summary on a 0–100 scale. On the 175-messag
 
 ### Repeatable rehearsal
 
-From the extracted source root, install `requirements-test.txt` in the backend's app virtualenv. Stop your demo backend before invoking `tests.standalone_chrome`. It creates its own temporary databases, starts its own server on port 8000, and stops only that server.
+From the repository root, install `requirements-test.txt` in the backend's app virtualenv. Stop your demo backend before invoking `tests.standalone_chrome`. It creates its own temporary databases, starts its own server on port 8000, and stops only that server.
 
 ```sh
 source .runtime/app-venv/bin/activate

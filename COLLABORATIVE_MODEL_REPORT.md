@@ -2,7 +2,7 @@
 
 ## November 27, 2026 · Hackathon release
 
-The Chrome and source packages are available in `.runtime/hackathon-release/final/`. The release retains its TF-IDF email classifier and local URL model. The validation-selected character model caught 59 of 88 phishing examples and flagged 71 of 87 legitimate emails in the manual benchmark. The deployed policy caught three and produced zero false alerts on that set. The web and Chrome displays now label their 0–100 values as risk indices. The report records cohort metrics, the deployment rationale, clean installation checks and the limits of browser verification. [Release report](RELEASE_REPORT.md) · [Lightweight model evaluation](docs/release-model-evaluation.json) · [Installation](INSTALL.md) · [Demonstration](DEMO_GUIDE.md)
+The release retains its TF-IDF email classifier and local URL model. The validation-selected character model caught 59 of 88 phishing examples and flagged 71 of 87 legitimate emails in the manual benchmark. The deployed policy caught three and produced zero false alerts on that set. The web and Chrome displays now label their 0–100 values as risk indices. The report records cohort metrics, the deployment rationale, clean installation checks and the limits of browser verification. [Release report](RELEASE_REPORT.md) · [Lightweight model evaluation](docs/release-model-evaluation.json) · [Installation](INSTALL.md) · [Demonstration](DEMO_GUIDE.md)
 
 
 ## November 26, 2026 · Gemini architecture and threshold evaluation

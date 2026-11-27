@@ -20,8 +20,6 @@ from backend.url_advisory import new_features
 from training.train_reviewed_features import evaluate
 
 
-ROOT = Path(__file__).resolve().parents[1]
-OLD_FEATURES = joblib.load(ROOT / "models/url_features_v2.joblib")
 group_for_host = lru_cache(maxsize=65536)(registrable)
 
 
@@ -33,15 +31,17 @@ def parts_and_host(url):
         return None
 
 
-def original_file(path):
+def original_file(path, columns):
     with zipfile.ZipFile(path) as archive:
         entry = next(name for name in archive.namelist() if name.lower().endswith(".csv"))
         with archive.open(entry) as csv:
-            return pd.read_csv(csv, usecols=["URL", "label", *OLD_FEATURES])
+            return pd.read_csv(csv, usecols=["URL", "label", *columns])
 
 
-def run(phresh, phiusiil, output):
-    original = original_file(phiusiil)
+def run(phresh, phiusiil, output, legacy_models):
+    columns = joblib.load(legacy_models / "url_features_v2.joblib")
+    baseline_path = legacy_models / "url_phishing_model_v2.joblib"
+    original = original_file(phiusiil, columns)
     old_groups = set()
     valid = []
     for url in original.URL:
@@ -49,8 +49,8 @@ def run(phresh, phiusiil, output):
         valid.append(parsed is not None)
         if parsed:
             old_groups.add(parsed[2])
-    reference = original.loc[valid, OLD_FEATURES].reset_index(drop=True)
-    recomputed = pd.DataFrame([server.extract_features_dict(url) for url in original.loc[valid, "URL"]])[OLD_FEATURES]
+    reference = original.loc[valid, columns].reset_index(drop=True)
+    recomputed = pd.DataFrame([server.extract_features_dict(url) for url in original.loc[valid, "URL"]])[columns]
 
     sources = pd.read_csv(phresh, usecols=["url", "source_label"]).dropna()
     rows, seen = [], set()
@@ -67,9 +67,9 @@ def run(phresh, phiusiil, output):
     y = np.array([label for *_, label in rows])
     domains = np.array([group for _, _, _, group, _ in rows])
     fit, test = next(GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=42).split(rows, groups=domains))
-    baseline = joblib.load(ROOT / "models/url_phishing_model_v2.joblib")
+    baseline = joblib.load(baseline_path)
     baseline.n_jobs = 1
-    baseline_rows = pd.DataFrame([server.extract_features_dict(rows[i][0]) for i in test])[OLD_FEATURES]
+    baseline_rows = pd.DataFrame([server.extract_features_dict(rows[i][0]) for i in test])[columns]
     replacement = pd.DataFrame([new_features(parts, host) for _, parts, host, _, _ in rows])
     model = HistGradientBoostingClassifier(max_iter=150, max_leaf_nodes=15, random_state=42, class_weight="balanced")
     model.fit(replacement.iloc[fit], y[fit])
@@ -90,7 +90,7 @@ def run(phresh, phiusiil, output):
         "fit": dict(Counter(int(value) for value in y[fit])),
         "holdout": dict(Counter(int(value) for value in y[test])),
         "shared_fit_and_holdout_domains": len(set(domains[fit]) & set(domains[test])),
-        "legacy": measure(baseline, baseline_rows, 0, (ROOT / "models/url_phishing_model_v2.joblib").stat().st_size),
+        "legacy": measure(baseline, baseline_rows, 0, baseline_path.stat().st_size),
         "candidate": measure(model, replacement.iloc[test], 1, artifact.stat().st_size),
     }
     (output / "evaluation.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -102,5 +102,6 @@ if __name__ == "__main__":
     parser.add_argument("phresh", type=Path, help="PhreshPhish URL-only test export")
     parser.add_argument("phiusiil", type=Path, help="Original PhiUSIIL ZIP")
     parser.add_argument("output", type=Path, help="New candidate directory")
+    parser.add_argument("--legacy-models", required=True, type=Path, help="Directory with the archived URL model and feature list")
     args = parser.parse_args()
-    print(json.dumps(run(args.phresh, args.phiusiil, args.output), indent=2))
+    print(json.dumps(run(args.phresh, args.phiusiil, args.output, args.legacy_models), indent=2))
