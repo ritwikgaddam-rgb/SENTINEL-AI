@@ -2,6 +2,16 @@
 
 November 27, 2026 · Release for the November 28 hackathon.
 
+## Automatic threat collection update
+
+The companion ZIPs are published locally under `.runtime/automatic-threat-collection/release/`. The tagged hackathon artifacts remain available in their original folder. The models, thresholds, extension identity and Gmail OAuth configuration match that release.
+
+The backend initializes history and threat storage independently. Their defaults are `backend/sentinel_ai.db` and `backend/sentinel_threats.db`. The threat migration adds `samples.risk_index`, `samples.indicators`, `samples.model_version` and a per-database `collection.dedup_key`. Older rows and approvals are retained. The old manual opt-in is reset once so users choose whether to enable automatic collection. New automatic rows start pending and unlabelled.
+
+Automatic collection occurs after an existing suspicious verdict. It saves numeric features and non-identifying metadata. Email deduplication uses a keyed fingerprint of normalized input. URL deduplication ignores queries and fragments. Webpage deduplication also considers the bounded observations. Exact wording changes may produce another sample. Offline scans report collection unavailable and have no replay queue.
+
+**Settings → Threat review** controls the global switch, review actions and approved numeric export. Webpage collection applies to the existing webpage analysis API. The extension does not automatically inspect arbitrary tab contents. The macOS verification ran 87 Python tests and 11 Node tests. The installed build replayed 3,106 labelled fixtures with matching Python verdicts and scores. Synthetic Gmail, the web review and export controls, both database failures and recovery, and offline restart passed. Live Gmail and Windows were outside this verification.
+
 ## Signing-key rotation and publication status
 
 The old private Chrome signing key was committed in `1cb01ab`. Its public half matched the previous release's extension ID. The local copy is quarantined in an ignored directory with restricted permissions. This unpacked release uses a freshly generated public identity. No corresponding private key was saved. The loopback API derives the accepted origin from the new manifest and rejects the retired ID.

@@ -271,12 +271,11 @@ class StorageTests(unittest.TestCase):
         self.handler.command = "POST"
         server.init_db()
 
-    def test_api_consent_review_export_and_storage(self):
+    def test_api_global_collection_review_export_and_storage(self):
         call = self.handler.handle_post
-        payload = {"text": "Send your password now. Address demo@example.org.", "collect_sample": True}
+        payload = {"text": "Send your password now. Address demo@example.org."}
         self.assertIsNone(call("/api/scan-email", payload)["sample_id"])
         call("/api/threats/settings", {"enabled": True})
-        self.assertNotIn("sample_id", call("/api/scan-email", {**payload, "collect_sample": False}))
         sample_id = call("/api/scan-email", payload)["sample_id"]
         self.assertIsInstance(sample_id, int)
         self.assertIsNone(call("/api/scan-email", payload)["sample_id"])
@@ -329,7 +328,7 @@ class StorageTests(unittest.TestCase):
 
     def test_text_export_requires_separate_consent_and_human_approval(self):
         call = self.handler.handle_post
-        body = ("Please send a security report about the account. From fixture@example.org. "
+        body = ("Please reply with your password to confirm the security review. From fixture@example.org. "
                 "Password: fixture-hidden-secret. Link: https://example.org/private?token=fixture-query-secret")
         message = {"text": body, "subject": "Meeting reminder for Taylor", "collect_sample": True, "collect_text": True}
         call("/api/threats/settings", {"enabled": True})
@@ -337,7 +336,7 @@ class StorageTests(unittest.TestCase):
         self.assertIsNone(server.threats.list_samples()["samples"][0]["sanitized_body"])
         call("/api/threats/settings", {"sanitized_text_enabled": True})
         self.assertIsNone(call("/api/v2/scan-email", message | {"collect_text": False})["sample_id"])
-        sample = call("/api/v2/scan-email", message)["sample_id"]
+        sample = call("/api/v2/scan-email", message)["text_sample_id"]
         self.assertNotEqual(sample, numeric)
         self.assertEqual(server.threats.list_samples(approved_only=True, mode="text"), [])
         call("/api/threats/review", {"id": sample, "action": "legitimate"})

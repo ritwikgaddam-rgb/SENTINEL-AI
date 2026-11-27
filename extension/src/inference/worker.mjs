@@ -78,7 +78,11 @@ async function scan(kind, origin, input) {
     connections.set(origin, {online: false, until: Date.now() + 5000});
   }
   const local = await packagedScanner();
-  return kind === 'url' ? local.scanUrl(input.url) : local.scanEmail(input);
+  const result = kind === 'url' ? local.scanUrl(input.url) : local.scanEmail(input);
+  return {...result, persistence: {...result.persistence, collection: 'unavailable'}, markers: [
+    ...result.markers, {id: 'collection_unavailable', title: 'Threat collection unavailable',
+      description: 'This scan ran offline. Threat collection requires the local backend.', severity: 'low'},
+  ]};
 }
 
 export function handleScan(message, sender, respond) {
@@ -91,9 +95,10 @@ export function handleScan(message, sender, respond) {
     const result = await scan(message.kind, origin, payload(message.kind, message.input));
     if (gmail) {
       // The content script only needs the public verdict, never the private backend payload.
-      const {risk_level, risk_score, safety_score, assessment, markers, private_items_count, inference_source} = result;
+      const {risk_level, risk_score, safety_score, assessment, markers, private_items_count, inference_source, persistence} = result;
       return {risk_level, risk_score, safety_score, assessment, markers: markers.map(({id, title, description, severity}) =>
-        ({id, title, description, severity})), private_items_count, inference_source};
+        ({id, title, description, severity})), private_items_count, inference_source,
+        persistence: {collection: persistence?.collection}};
     }
     return result;
   })().then(respond, () => respond({assessment: 'Analysis unavailable', risk_level: 'unknown',

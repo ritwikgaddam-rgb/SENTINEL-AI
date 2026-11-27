@@ -2,10 +2,13 @@
 
 from contextlib import contextmanager
 from hashlib import sha256
+import hmac
+from math import isfinite
 from pathlib import Path
 import json
 import os
 import re
+import secrets
 import sqlite3
 
 import privacy_detector
@@ -56,17 +59,43 @@ CREATE TABLE IF NOT EXISTS sanitized_samples (
 def connection():
     default = Path(__file__).with_name("sentinel_threats.db")
     path = Path(os.getenv("SENTINELAI_THREATS_PATH", str(default)))
+    history = Path(os.getenv("SENTINELAI_DB_PATH", str(default.with_name("sentinel_ai.db"))))
+    if path.resolve() == history.resolve() or (
+        path.exists() and history.exists() and path.samefile(history)
+    ):
+        raise sqlite3.OperationalError("Threat and history storage require separate files.")
     path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path, timeout=5)
+    # A busy review database must not delay connected inference for seconds.
+    db = sqlite3.connect(path, timeout=0.5)
     db.row_factory = sqlite3.Row
     try:
         db.execute("PRAGMA secure_delete = ON")
         db.execute("PRAGMA foreign_keys = ON")
-        db.executescript(SCHEMA)
+        if "dedup_key" not in columns(db, "collection") or "model_version" not in columns(db, "samples"):
+            db.executescript(SCHEMA)
+            db.execute("BEGIN IMMEDIATE")
+            with db:
+                if "dedup_key" not in columns(db, "collection"):
+                    db.execute("ALTER TABLE collection ADD COLUMN dedup_key BLOB")
+                    # The earlier setting allowed individually requested samples only.
+                    db.execute("UPDATE collection SET enabled = 0 WHERE id = 1")
+                for name, datatype in (("risk_index", "REAL"), ("indicators", "TEXT NOT NULL DEFAULT '[]'"),
+                                       ("model_version", "TEXT")):
+                    if name not in columns(db, "samples"):
+                        db.execute(f"ALTER TABLE samples ADD COLUMN {name} {datatype}")
         with db:
             yield db
     finally:
         db.close()
+
+
+def columns(db, table):
+    return {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+
+
+def init_db():
+    with connection():
+        pass
 
 
 def settings(enabled=None, retention_days=None, sanitized_text_enabled=None):
@@ -105,7 +134,7 @@ def masked_terms(text):
     return " ".join(term for word in words if (term := word.rstrip(".")) in TRAINING_TERMS)
 
 
-def collect(kind, features, assessment, consent, text_sample=None):
+def collect(kind, features, assessment, consent, text_sample=None, *, automatic=None):
     if consent is not True:
         return None
     if (kind not in TYPES or assessment not in {"neutral", "suspicious", "uncertain"} or not features
@@ -121,17 +150,35 @@ def collect(kind, features, assessment, consent, text_sample=None):
             return None
         text_enabled = db.execute("SELECT enabled FROM text_policy WHERE id = 1").fetchone()[0]
         masked = None
-        if kind == "email" and text_sample and text_enabled:
+        if automatic is None and kind == "email" and text_sample and text_enabled:
             subject, body = (masked_terms(value) for value in text_sample)
             subject, body = (" ".join(value.split()[:limit]) for value, limit in ((subject, 15), (body, 100)))
             if len(set((subject + " " + body).split())) >= 3:
                 masked = (subject, body)
-        fingerprint = f"{TEXT_VERSION}:{kind}:{masked}" if masked else f"features-v1:{kind}:{payload}"
-        digest = sha256(fingerprint.encode()).hexdigest()
+        risk_index, indicators, model_version = None, [], None
+        if automatic is not None:
+            source_identity, risk_index, indicators, model_version = automatic
+            if assessment != "suspicious":
+                return None
+            key = db.execute("SELECT dedup_key FROM collection WHERE id = 1").fetchone()[0]
+            if key is None:
+                key = secrets.token_bytes(32)
+                db.execute("UPDATE collection SET dedup_key = ? WHERE id = 1", (key,))
+            identity = " ".join(source_identity.split())
+            material = f"auto-v1:{kind}:{identity or payload}".encode("utf-8", "surrogatepass")
+            digest = hmac.new(key, material, "sha256").hexdigest()
+            if risk_index is not None and not (isfinite(risk_index) and 0 <= risk_index <= 100):
+                raise ValueError("Invalid risk index.")
+        else:
+            if text_sample is not None and masked is None:
+                return None
+            fingerprint = f"{TEXT_VERSION}:{kind}:{masked}" if masked else f"features-v1:{kind}:{payload}"
+            digest = sha256(fingerprint.encode()).hexdigest()
         cursor = db.execute(
-            """INSERT OR IGNORE INTO samples (kind, fingerprint, features, assessment, version)
-               VALUES (?, ?, ?, ?, 'features-v1')""",
-            (kind, digest, payload, assessment),
+            """INSERT OR IGNORE INTO samples
+               (kind, fingerprint, features, assessment, version, risk_index, indicators, model_version)
+               VALUES (?, ?, ?, ?, 'features-v1', ?, ?, ?)""",
+            (kind, digest, payload, assessment, risk_index, json.dumps(indicators), model_version),
         )
         if not cursor.rowcount:
             return None
@@ -159,13 +206,16 @@ def list_samples(kind=None, status=None, approved_only=False, offset=0, mode="fe
             return [dict(row) | {"features": json.loads(row["features"]), "status": "approved"} for row in rows]
         rows = db.execute(
             """SELECT id, created_at, kind, features, assessment, version, status, label,
+                      risk_index, indicators, model_version,
                       subject AS sanitized_subject, body AS sanitized_body
                FROM samples LEFT JOIN sanitized_samples ON sample_id = id
                WHERE (? IS NULL OR kind = ?) AND (? IS NULL OR status = ?)
                ORDER BY id DESC LIMIT 100 OFFSET ?""", (kind, kind, status, status, offset))
-        samples = [{**dict(row), "features": json.loads(row["features"])} for row in rows]
+        samples = [{**dict(row), "features": json.loads(row["features"]),
+                    "indicators": json.loads(row["indicators"])} for row in rows]
         counts = dict(db.execute("SELECT status, COUNT(*) FROM samples GROUP BY status"))
-    return {"samples": samples, "counts": counts}
+        labels = dict(db.execute("SELECT label, COUNT(*) FROM samples WHERE label IS NOT NULL GROUP BY label"))
+    return {"samples": samples, "counts": counts, "label_counts": labels}
 
 
 def review(sample_id, action):

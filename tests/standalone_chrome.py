@@ -20,7 +20,7 @@ import sys
 import tempfile
 import time
 from urllib.parse import urlsplit
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from tests.browser_smoke import exercise_compose, wait
 from backend import server
@@ -40,6 +40,14 @@ CONTEXT_CASES = json.loads((Path(__file__).parent / "fixtures/credential_context
 def listening():
     with socket.socket() as sock:
         return sock.connect_ex(('127.0.0.1', 8000)) == 0
+
+
+def threat_api(path="", payload=None):
+    request = Request("http://127.0.0.1:8000/api/threats" + path,
+                      data=json.dumps(payload).encode() if payload is not None else None,
+                      headers={"Content-Type": "application/json"})
+    with urlopen(request) as response:
+        return json.load(response)
 
 
 @contextmanager
@@ -206,9 +214,17 @@ def run(bundle, replay, results):
                 for case in CONTEXT_CASES:
                     result = browser.scan(case)
                     assert (result["inference_source"], result["risk_level"]) == ("loopback", case["expected"]), case["case"]
+                assert threat_api()["samples"] == []
+                threat_api("/settings", {"enabled": True, "sanitized_text_enabled": True})
                 connected_gmail = browser.gmail([CONTEXT_CASES[i] for i in (0, 3, 4)])
                 classes = connected_gmail.evaluate("[...document.querySelectorAll('.adn .sentinel-gmail-bar')].map(b => b.className.split(' ').at(-1))")
                 assert classes == ["safe", "unknown", "danger"], classes
+                browser.gmail([CONTEXT_CASES[4]])
+                sample, = threat_api()["samples"]
+                assert sample["kind"] == "email" and sample["label"] is None and sample["sanitized_body"] is None
+                url = browser.scan({"url": "https://account.example@elsewhere.example/review"}, "url")
+                assert url["persistence"]["collection"] == "saved"
+                assert threat_api()["counts"] == {"pending": 2}
                 compose = browser.gmail(CASES[:1])
                 exercise_compose(compose)
                 verify_privacy_matrix(compose)
@@ -216,6 +232,7 @@ def run(bundle, replay, results):
             assert not subprocess.run(["lsof", "-nP", "-iTCP:8000", "-sTCP:LISTEN"], capture_output=True).stdout
             r = browser.scan(CASES[1])
             assert r["inference_source"] == "packaged_model" and r["risk_level"] == "danger"
+            assert r["persistence"]["collection"] == "unavailable"
             gmail_cases = [CONTEXT_CASES[i] for i in (0, 3, 4)]
             page = browser.gmail(CASES + gmail_cases)
             classes = page.evaluate("[...document.querySelectorAll('.adn .sentinel-gmail-bar')].map(b => [b.className,b.querySelector('.sentinel-bar-score').textContent])")
@@ -322,6 +339,12 @@ def run(bundle, replay, results):
                 wait(lambda: browser.scan(CASES[0])["inference_source"] == "loopback", timeout=12)
                 persisted = browser.scan(CASES[1])
                 assert persisted["persistence"]["history"] == "unavailable" and persisted["risk_level"] == "danger"
+                assert persisted["persistence"]["collection"] == "unavailable"
+            with backend(tmp / "history.db", tmp / "threats.db"):
+                wait(lambda: browser.scan(CASES[0])["inference_source"] == "loopback", timeout=12)
+                resumed = browser.scan({"text": "Please reply with your password to confirm the different fixture."})
+                assert resumed["persistence"]["collection"] == "saved"
+                assert threat_api()["counts"] == {"pending": 3}
             if results:
                 results.write_text(json.dumps(report, indent=2))
             print("Chrome restart, recovery, unavailable SQLite, local URL model and zero warm scan network requests passed.", flush=True)

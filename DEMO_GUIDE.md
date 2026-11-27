@@ -2,7 +2,7 @@
 
 ## Prepare the demo
 
-Use the tagged release ZIPs from the release directory. Follow the [installation guide](INSTALL.md) before going offline. Start the backend on `127.0.0.1:8000` and the web preview on `127.0.0.1:4173`. Use test data and an isolated SQLite database. For the live Gmail overlay, open a fictional message in an authorized demo account. The installed-browser rehearsal supplies a synthetic Gmail page and performs the same local scans and compose actions without account access.
+Use the tagged release ZIPs from the release directory. For automatic collection use the companion build in `.runtime/automatic-threat-collection/release/`. Follow the [installation guide](INSTALL.md) before going offline. Start the backend on `127.0.0.1:8000` and the web preview on `127.0.0.1:4173`. Use test data and an isolated SQLite database. For the live Gmail overlay, open a fictional message in an authorized demo account. The installed-browser rehearsal supplies a synthetic Gmail page and performs the same local scans and compose actions without account access.
 
 ## Five-minute demo
 
@@ -16,6 +16,19 @@ Use the tagged release ZIPs from the release directory. Follow the [installation
 | Privacy and redaction | Paste `Email: demo@example.org` in Privacy. Expect `Email: [EMAIL]`. In Gmail compose, use the synthetic draft below and open the pill. Deselect all, select only the email and choose **Redact selected**. Choose **Undo** to restore the draft. | Backend. Live Gmail also needs internet. |
 | Scan history | Open **Scan & Audit History** after submitting a URL and an email. Show the scan type, timestamp, generic target and risk index. The original email body and URL are absent. | Backend with SQLite |
 | Standalone inference | Stop the API you started and leave the web preview server running. In Chrome, open the local preview tab and then the extension popup. Shield checks the tab's local HTTP address. Email Guard still evaluates pasted text. The Privacy and History surfaces can report that their backend is unavailable. Restart the API and retry. | Installed extension for offline scoring |
+
+### Demonstrate automatic threat review
+
+Start with empty demo databases. On macOS, run the backend from the source directory with:
+
+```sh
+SENTINELAI_DB_PATH=.runtime/demo/history.db SENTINELAI_THREATS_PATH=.runtime/demo/threats.db bash start_backend.sh
+```
+
+1. Scan the fictional code disclosure message from the table while collection is off. The scan appears in history. **Threat review** stays empty.
+2. Open **Settings → Threat review**, enable **Automatic collection**, and rescan. The review queue shows one pending email. Try the same input again to show deduplication. For an additional pending sample, scan the second URL from the table without opening it.
+3. Mark the fictional email **Confirm phishing**, then **Approve for training**. Download the approved export and show the numeric features and human label. A mistaken alert can instead be confirmed legitimate. Delete the demo row or disable collection when finished.
+4. Stop the backend and repeat the fictional email scan in the installed extension. The verdict remains available, and the details say collection is unavailable. This scan is never uploaded or saved later.
 
 Compose rehearsal draft:
 

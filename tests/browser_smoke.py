@@ -189,6 +189,48 @@ def smoke(page, preview, api):
     page.evaluate('document.querySelector(\'button[title="Scan & Audit History"]\').click()')
     wait(lambda: page.has_text("Email assessment"))
     page.evaluate('document.querySelector(\'button[title="Close History"]\').click()')
+    page.evaluate('document.querySelector(\'button[title="Extension Settings & Auth0"]\').click()')
+    queue = "document.querySelector('[aria-label=\"Threat review\"]')"
+    toggle = queue + ".querySelector('input[type=checkbox]')"
+    wait(lambda: page.evaluate(f"{toggle}?.checked === false"))
+    page.evaluate(f"{toggle}.click()")
+    wait(lambda: page.evaluate(f"{toggle}?.checked === true && !{toggle}.disabled"))
+    page.evaluate('document.querySelector(\'button[title="Close"]\').click()')
+    page.button("Email Guard")
+    page.field("textarea.textarea-clean", "Please reply with the verification code sent to your device.")
+    page.button("Analyze for Phishing & Leaks")
+    wait(lambda: page.has_text("Direct request for sensitive information"))
+    page.evaluate('document.querySelector(\'button[title="Extension Settings & Auth0"]\').click()')
+    wait(lambda: page.has_text("1 pending") and page.evaluate(f"!!{queue}.querySelector('select')"))
+    for action in ("legitimate", "approve"):
+        page.evaluate(f"""{queue}.querySelector('select').value={json.dumps(action)};
+            {queue}.querySelector('select').dispatchEvent(new Event('change', {{bubbles:true}}));""")
+        page.button("Apply review")
+        wait(lambda: page.has_text("1 " + ("confirmed legitimate" if action == "legitimate" else "approved")))
+    export = page.evaluate("""(async () => {
+        let download;
+        const original = URL.createObjectURL;
+        URL.createObjectURL = blob => { download = blob.text(); return '#fixture'; };
+        const click = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function () {};
+        try {
+          [...document.querySelectorAll('button')].find(b => b.textContent === 'Export approved samples').click();
+          for (let i = 0; i < 100 && !download; ++i) await new Promise(resolve => setTimeout(resolve, 25));
+          return download ? JSON.parse(await download) : null;
+        } finally {
+          URL.createObjectURL = original;
+          HTMLAnchorElement.prototype.click = click;
+        }
+    })()""")
+    assert [row["label"] for row in export["samples"]] == ["legitimate"]
+    page.evaluate(f"""{queue}.querySelector('select').value='delete';
+        {queue}.querySelector('select').dispatchEvent(new Event('change', {{bubbles:true}}));
+        window.confirm = () => true;""")
+    page.button("Apply review")
+    wait(lambda: page.has_text("0 collected"))
+    page.evaluate(f"{toggle}.click()")
+    wait(lambda: page.evaluate(f"{toggle}?.checked === false && !{toggle}.disabled"))
+    page.evaluate('document.querySelector(\'button[title="Close"]\').click()')
 
     privacy = page.evaluate("""window.testPost('/api/privacy-redact', {
         text: 'IBAN: GB82 WEST 1234 5698 7654 32.\\nOrder reference ID: 9876543210', preview: true

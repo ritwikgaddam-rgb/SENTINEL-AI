@@ -41,12 +41,11 @@ The built-in English writing checks run locally. For broader coverage, start a s
 
 ## Threat samples and retraining
 
-The separate SQLite queue uses numeric features by default. Collection starts disabled. Send enabled: true to POST /api/threats/settings, then explicitly set collect_sample: true in a selected scan. For the email-only masked-text experiment, enable sanitized_text_enabled separately and set collect_text: true on the chosen scan. That mode stores a bounded set of recognized terms. The database omits free-form text and rejects masked samples with too little signal.
+Open **Settings → Threat review** and enable **Automatic collection** to opt in. Suspicious email, URL and webpage assessments can then enter the local review queue as pending with no training label. Connected Chrome scans include opened Gmail messages and active-tab URL checks. Preview-only API calls and scans without suspicious findings stay out of this queue. Scan history uses a separate SQLite database.
 
-1. List the queue with GET /api/threats. Filter by kind, status and offset.
-2. Use POST /api/threats/review with id and action to label phishing, legitimate, uncertain or rejected. Review the original evidence locally before assigning a label.
-3. Use action approve to approve a confirmed label. Changing a label clears approval. Use action delete to delete a sample, or POST /api/threats/prune to remove expired samples according to retention_days.
-4. Export approved rows with GET /api/threats/export. Use mode=text for approved masked email terms. Refresh older exports to include the approval status required by the training command.
+Automatic collection stores bounded numeric features, warning categories, risk index, time and model version. It uses a local keyed fingerprint to deduplicate. No raw message text, private URL or attachment is persisted. The existing masked-text research mode requires its separate setting and an explicit manual API request. Automatic scans use only the numeric path.
+
+Use **Threat review** to confirm phishing or legitimate, mark uncertain, reject or delete. A confirmed example needs a separate **Approve for training** action. **Export approved samples** downloads the numeric export. Changing a label clears approval. The existing API also supports `GET /api/threats`, `POST /api/threats/review`, `GET /api/threats/export` and `POST /api/threats/prune`. See [database setup](INSTALL.md#sqlite-and-threat-review).
 
 Combine exports with verified historical examples and an independent holdout. Historical and holdout rows need a source or campaign group, a kind, a label of legitimate or phishing, and the same features schema. The text mode expects body and optional subject fields and masks them before training. Preserve the original artifact and use a fresh output directory for each candidate.
 

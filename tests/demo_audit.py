@@ -88,7 +88,7 @@ def run(base, startup_ms):
     assert redact["total_redacted"] == 16 and redact["total_review"] == 0
     assert call("/api/threats/settings")["enabled"] is False
     call("/api/threats/settings", {"enabled": True})
-    payload = {**PHISHING, "collect_sample": True}
+    payload = PHISHING
     first = call("/api/v2/scan-email", payload)["sample_id"]
     assert isinstance(first, int) and call("/api/v2/scan-email", payload)["sample_id"] is None
     assert call("/api/threats/export")["samples"] == []
@@ -133,9 +133,8 @@ def main():
                 if not match:
                     raise RuntimeError("Local demo backend did not start.")
                 assert Path(env["SENTINELAI_DB_PATH"]).is_file()
-                run("http://127.0.0.1:" + match[1], (perf_counter() - start) * 1000)
-                # The optional review store is created on its first use.
                 assert Path(env["SENTINELAI_THREATS_PATH"]).is_file()
+                run("http://127.0.0.1:" + match[1], (perf_counter() - start) * 1000)
             finally:
                 server.terminate()
 

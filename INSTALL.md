@@ -50,7 +50,20 @@ The Gmail overlay uses your existing Gmail tab and its compose panel uses the lo
 
 The project owner should retire the Google OAuth client bound to the old extension ID and review or revoke its existing grants. Use a fresh Chrome Web Store item and its public key if the team later publishes a signed distribution. Register OAuth for that item's ID and rebuild the backend source manifest and extension with the same public key. [Chrome extension identity](https://developer.chrome.com/docs/extensions/reference/manifest/key)
 
-SQLite creates history and review databases on first use. The API stores scan metadata and keeps threat sample collection off by default. For an isolated rehearsal, set `SENTINELAI_DB_PATH` and `SENTINELAI_THREATS_PATH` to paths in a new local directory before starting. Test accounts and fictional fixtures are appropriate for presentation.
+### SQLite and threat review
+
+Startup initializes both databases when their paths are writable. Defaults relative to the source folder are `backend/sentinel_ai.db` for scan and privacy history, and `backend/sentinel_threats.db` for the separate review queue. Override them with `SENTINELAI_DB_PATH` and `SENTINELAI_THREATS_PATH` before starting. Use distinct files. Use an isolated demo directory and fictional inputs for a rehearsal.
+
+Open **Settings → Threat review** in the web app or installed popup. The global switch starts off, including once after upgrading from the earlier manual collection workflow. The queue shows review counts and pending samples. Only confirmed samples can be approved, and the export contains approved numeric rows. Turning off collection stops new samples. Existing rows remain available for review or deletion.
+
+With the API offline, Chrome still assesses emails and URLs. The result details report that collection is unavailable. Offline inputs are never queued. After reconnecting, subsequent eligible scans can be collected again.
+
+To inspect the SQLite files using the macOS SQLite CLI, use read-only access. Change the file names below if you set overrides.
+
+```sh
+sqlite3 -readonly backend/sentinel_ai.db 'SELECT scan_type, risk_level, created_at FROM scan_history ORDER BY id DESC LIMIT 10;'
+sqlite3 -readonly backend/sentinel_threats.db 'SELECT kind, status, label, risk_index, created_at FROM samples ORDER BY id DESC LIMIT 10;'
+```
 
 ### Troubleshooting
 

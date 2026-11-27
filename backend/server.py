@@ -172,7 +172,8 @@ def legacy_scan_response(result, gmail=False):
     legacy = {"risk_level": level, "safety_score": result["safety_score"], "markers": markers,
               "assessment": result["assessment"], "explanation": result["explanation"]}
     if gmail:
-        return legacy | {"private_items_count": result.get("private_items_count", 0)}
+        return legacy | {"private_items_count": result.get("private_items_count", 0),
+                         "persistence": {"collection": result.get("persistence", {}).get("collection", "not_eligible")}}
     return result | legacy | {"evidence_level": result["risk_level"]}
 
 
@@ -291,7 +292,6 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
 
     def handle_post(self, path, body):
         gmail = self.headers.get("Origin") == "https://mail.google.com"
-        consent = body.get("collect_sample") is True and not gmail
         preview = body.get("preview") is True and not gmail
         if path in {"/api/scan-url", "/api/v2/scan-url"}:
             url = text_field(body, "url", 2083).strip()
@@ -300,7 +300,7 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
             # Trainable URL counts omit credentials, query and fragments.
             features = extract_features_dict(destination(parts, host))
             if not preview:
-                self.record_scan("url", result, features, consent)
+                self.record_scan("url", result, features, destination(parts, host))
             return legacy_scan_response(result) if path == "/api/scan-url" else result
         if path in {"/api/scan-email", "/api/v2/scan-email"}:
             text = text_field(body, "text", 20000)
@@ -313,8 +313,14 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
                                         text_field(body, "reply_to", 500), html,
                                         [label[:40] for label in list_field(body, "labels", 50) if isinstance(label, str)])
             if not preview:
-                text_sample = (subject, result["redacted_text"]) if consent and body.get("collect_text") is True else None
-                self.record_scan("email", result, email_features(result), consent, text_sample)
+                features = email_features(result)
+                self.record_scan("email", result, features, (text or html) + "\n" + subject)
+                if not gmail and body.get("collect_sample") is True and body.get("collect_text") is True:
+                    ok, sample = optional_store(threats.collect, "email", features, result["risk_level"], True,
+                                                (subject, result["redacted_text"]))
+                    result["text_sample_id"] = sample
+                    if ok and sample is not None and result["sample_id"] is None:
+                        result["sample_id"] = sample
             return legacy_scan_response(result, gmail) if path == "/api/scan-email" else result
         if path == "/api/scan-page":
             url = text_field(body, "url", 2083)
@@ -323,7 +329,9 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
                         enough=any(result["observations"].values()))
             if preview:
                 return result
-            return self.record_scan("webpage", result, result["observations"], consent)
+            parts, host, _ = split_url(url, assume_https=True)
+            identity = destination(parts, host) + "\n" + json.dumps(result["observations"], sort_keys=True)
+            return self.record_scan("webpage", result, result["observations"], identity)
         if path == "/api/privacy-redact":
             text = text_field(body, "text", 40000)
             if not text.strip():
@@ -368,15 +376,25 @@ class SentinelAPIHandler(BaseHTTPRequestHandler):
         raise KeyError(path)
 
     @staticmethod
-    def record_scan(kind, result, features, consent, text_sample=None):
+    def record_scan(kind, result, features, identity):
         saved, _ = optional_store(log_scan, kind, f"{kind.capitalize()} assessment", result["risk_level"],
                                   result["risk_score"], [{"id": item["id"]} for item in result["markers"]],
                                   metadata={"screening_score": True})
-        result["persistence"] = {"history": "saved" if saved else "unavailable", "collection": "not_requested"}
-        if consent:
-            ok, sample = optional_store(threats.collect, kind, features, result["risk_level"], consent, text_sample)
+        result["persistence"] = {"history": "saved" if saved else "unavailable", "collection": "not_eligible"}
+        result["sample_id"] = None
+        if result["risk_level"] == "suspicious":
+            indicators = sorted({item["id"] for item in result["markers"]})
+            version = result["model_observation"]["model"]
+            ok, sample = optional_store(
+                threats.collect, kind, features, result["risk_level"], True,
+                automatic=(identity, result["risk_score"], indicators, version),
+            )
             result["sample_id"] = sample
             result["persistence"]["collection"] = ("saved" if sample is not None else "skipped") if ok else "unavailable"
+            if not ok:
+                result["markers"].append({"id": "collection_unavailable", "title": "Threat collection unavailable",
+                                          "description": "The local threat database could not be reached.",
+                                          "severity": "low", "category": "assessment"})
         return result
 
     def log_message(self, format, *args):
@@ -396,7 +414,7 @@ def run_server(port=8000):
     candidate()
     with SentinelHTTPServer(("127.0.0.1", port), SentinelAPIHandler) as httpd:
         optional_store(init_db)
-        # The review store initializes on first use and is optional for scanning.
+        optional_store(threats.init_db)
         print(f"SentinelAI backend listening on http://127.0.0.1:{httpd.server_port}", flush=True)
         try:
             httpd.serve_forever()

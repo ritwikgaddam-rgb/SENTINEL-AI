@@ -1,3 +1,4 @@
+import ThreatReview from './ThreatReview';
 import { localApi } from '../localApi';
 import React, { useState, useEffect } from 'react';
 
@@ -320,6 +321,7 @@ export default function SettingsModal({
             )}
           </div>
 
+          <ThreatReview backendUrl={backendUrl} />
         </div>
       </div>
     </div>
