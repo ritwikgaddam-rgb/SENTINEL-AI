@@ -32,15 +32,15 @@ def extract_webpage(url):
         print("Unsafe URL")
         return None
     ##reqyuests the webpage and raises an error if the request fails
-    response = requests.get(url,timeout=10,headers={"User-Agent": "SentinelAI/1.0"},allow_redirects=False,stream=True)
-    if 300 <= response.status_code < 400:
+    download = requests.get(url,timeout=10,headers={"User-Agent": "SentinelAI/1.0"},allow_redirects=False,stream=True)
+    if 300 <= download.status_code < 400:
         print("Redirect detected. Extraction stopped.")
         return None
-    response.raise_for_status()
+    download.raise_for_status()
 
 
     ##parses webpage using beautfiul soup and limits amount of data downloaded to 1MB
-    soup = BeautifulSoup(response.raw.read(1024 * 1024), "html.parser")
+    soup = BeautifulSoup(download.raw.read(1024 * 1024), "html.parser")
 
     #extracts the title of the webpage if it exists
     title = ""
@@ -55,7 +55,7 @@ def extract_webpage(url):
 
     #returns the url, title and text of the webpage
     return {
-        "url": response.url,
+        "url": download.url,
         "title": title,
         "text": text[:5000]}
 

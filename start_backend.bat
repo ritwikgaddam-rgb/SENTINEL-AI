@@ -2,6 +2,10 @@
 setlocal
 cd /d "%~dp0" || exit /b 1
 
+set "VENV_DIR=.runtime\app-venv"
+set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
+if exist "%VENV_PYTHON%" goto run_backend
+
 if not defined SENTINELAI_PYTHON set "SENTINELAI_PYTHON=python"
 "%SENTINELAI_PYTHON%" -c "import sys; raise SystemExit(not ((3,11) <= sys.version_info[:2] <= (3,13)))"
 if errorlevel 1 (
@@ -9,11 +13,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set "VENV_DIR=.runtime\app-venv"
-set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
-if not exist "%VENV_PYTHON%" (
-    "%SENTINELAI_PYTHON%" -m venv "%VENV_DIR%" || exit /b 1
-)
+"%SENTINELAI_PYTHON%" -m venv "%VENV_DIR%" || exit /b 1
+
+:run_backend
 fc /b requirements.txt "%VENV_DIR%\installed-requirements.txt" >nul 2>&1
 if errorlevel 1 (
     "%VENV_PYTHON%" -m pip install -r requirements.txt || exit /b 1
