@@ -6,7 +6,7 @@ import EmailScannerTab from './components/EmailScannerTab';
 import PrivacyGuardTab from './components/PrivacyGuardTab';
 import SettingsModal from './components/SettingsModal';
 import HistoryModal from './components/HistoryModal';
-import { getToken, getTokenSilent, revokeToken, fetchUserProfile } from './gmailApi';
+import { gmailSignInConfigured, getToken, getTokenSilent, revokeToken, fetchUserProfile } from './gmailApi';
 import '../theme.css';
 import './Popup.css';
 
@@ -31,6 +31,8 @@ const TABS = [
 ];
 
 export default function App() {
+  const isExtension = globalThis.location.protocol === 'chrome-extension:';
+  const gmailConfigured = gmailSignInConfigured();
   const [theme, setTheme] = useState(() => localStorage.getItem('sentinel_theme') || 'cold');
   const [mode, setMode] = useState(() => localStorage.getItem('sentinel_mode') || 'dark');
   const [activeTab, setActiveTab] = useState('overview');
@@ -80,7 +82,7 @@ export default function App() {
     checkBackendHealth();
     fetchActiveTabUrl();
   }, [backendUrl]);
-  useEffect(() => { tryRestoreSession(); }, []);
+  useEffect(() => { if (gmailConfigured) tryRestoreSession(); }, [gmailConfigured]);
 
   // ── Backend ───────────────────────────────────────────────────────────────
 
@@ -100,15 +102,13 @@ export default function App() {
         setCurrentUrl(url);
         scanUrlTarget(url);
       });
-    } else {
-      const url = 'https://mail.google.com';
-      setCurrentUrl(url);
-      scanUrlTarget(url);
     }
   };
-  const scanUrlTarget = async (url) => {
+  const scanUrlTarget = async (input) => {
+    let url = input.trim();
+    if (!isExtension && url && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = 'https://' + url;
     if (!url || !/^https?:[/][/]/i.test(url)) {
-      setScanResult({ risk_level: 'unknown', assessment: 'No web address to assess', safety_score: null, markers: [] });
+      setScanResult({ risk_level: 'unknown', assessment: isExtension ? 'No web address to assess' : 'Enter a valid web address.', markers: [] });
       setLoading(false);
       return;
     }
@@ -119,11 +119,9 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url })
       });
-      if (res.ok) {
-        setScanResult(await res.json());
-        return;
-      }
-      throw new Error('Backend scan failed');
+      const result = await res.json();
+      if (!isExtension) setCurrentUrl(res.ok ? URL.parse(url)?.origin || '' : '');
+      setScanResult(res.ok ? result : { risk_level: 'unknown', assessment: result.error || 'Analysis unavailable', markers: [] });
     } catch {
       setScanResult({ risk_level: 'unknown', assessment: 'Analysis unavailable', safety_score: null, markers: [] });
     } finally {
@@ -172,7 +170,7 @@ export default function App() {
       setGoogleUser(profile);
       localStorage.setItem('sentinel_google_session', 'true');
     } catch (err) {
-      alert(`Google Sign-In failed: ${err.message}\n\nMake sure your OAuth Client ID is set in manifest.json and the extension is listed in the Google Cloud Console.`);
+      alert(`Google sign-in failed: ${err.message}\n\nCheck that the Google OAuth client is registered for this extension ID.`);
     } finally {
       setAuthLoading(false);
     }
@@ -234,7 +232,8 @@ export default function App() {
               loading={loading}
               theme={theme}
               mode={mode}
-              onRescan={() => scanUrlTarget(currentUrl)}
+              onRescan={scanUrlTarget}
+              manualUrl={!isExtension}
             />
           )}
           {activeTab === 'email' && (
@@ -245,6 +244,7 @@ export default function App() {
               backendUrl={backendUrl}
               googleUser={googleUser}
               accessToken={accessToken}
+              gmailConfigured={gmailConfigured}
               onSignIn={handleGoogleSignIn}
               authLoading={authLoading}
             />
@@ -273,6 +273,7 @@ export default function App() {
         backendOnline={backendOnline}
         checkBackendHealth={checkBackendHealth}
         googleUser={googleUser}
+        gmailConfigured={gmailConfigured}
         authLoading={authLoading}
         onSignIn={handleGoogleSignIn}
         onSignOut={handleGoogleSignOut}
@@ -282,7 +283,6 @@ export default function App() {
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
         backendUrl={backendUrl}
-        backendOnline={backendOnline}
       />
     </div>
   );

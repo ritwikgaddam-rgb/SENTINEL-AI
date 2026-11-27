@@ -34,3 +34,25 @@ test('multiple links, public suffix boundaries, and stripped query values', () =
   assert.equal(r.assessment, 'Suspicious');
   assert.ok(!JSON.stringify(r).includes('private-example'));
 });
+
+test('context distinguishes delivery, entry, advice and disclosure', async () => {
+  const cases = JSON.parse(await readFile(new URL('./fixtures/credential_context.json', import.meta.url)));
+  for (const c of cases) {
+    const r = scanner.scanEmail(c);
+    assert.equal(r.risk_level, c.expected, c.case);
+    assert.equal(r.score_kind, 'screening_index');
+    assert.equal(r.sender.authentication, 'unavailable');
+    if (c.marker) assert.ok(r.markers.some(m => m.id === c.marker), c.case);
+    if (c.expected !== 'danger') assert.ok(!r.markers.some(m => m.id === 'credential_request'), c.case);
+    if (c.expected === 'unknown') assert.equal(r.safety_score, null);
+  }
+});
+
+test('incidental outer whitespace preserves the destination for email inference', () => {
+  const input = {text: 'Here is the reading list for class.', sender: 'class@example.org'};
+  const clean = scanner.scanEmail({...input, links: ['http://example.org/read']});
+  const wrapped = scanner.scanEmail({...input, links: ['\nhttp://example.org/read \t']});
+  assert.deepEqual(wrapped.links, clean.links);
+  assert.equal(wrapped.links[0].sender_domain_relation, 'same');
+  assert.equal(wrapped.risk_score, clean.risk_score);
+});

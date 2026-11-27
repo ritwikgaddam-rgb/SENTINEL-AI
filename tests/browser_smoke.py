@@ -154,13 +154,21 @@ def smoke(page, preview, api):
         });
     """)
     page.call("Page.navigate", url=preview + "/popup.html")
+    wait(lambda: page.has_text("Waiting for a web address"))
+    assert page.evaluate("document.querySelector('button[type=submit]').disabled")
+    page.field("input[aria-label='Web address']", "example.org")
+    page.button("Scan URL")
     try:
-        wait(lambda: page.has_text("% Safe"))
+        wait(lambda: page.has_text("Risk index"))
     except RuntimeError:
         output = page.evaluate("({page: location.href, hasTestPost: !!window.testPost, rendered: document.body?.innerText})")
         raise RuntimeError(f"Shield fixture could not see the expected API response: {output}") from None
     assert not page.has_text("Phishing Threat")
-    assert not page.has_text("98% Safe")
+    assert not page.has_text("% Safe")
+    page.field("input[aria-label='Web address']", "https://")
+    page.button("Scan URL")
+    wait(lambda: page.has_text("Invalid request fields"))
+    wait(lambda: page.has_text("Score unavailable"))
 
     page.button("Email Guard")
     page.field("textarea.textarea-clean", "Hello")

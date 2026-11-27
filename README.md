@@ -1,32 +1,22 @@
 # SentinelAI
 
-SentinelAI runs a React browser preview and a Chrome Manifest V3 extension. The Python API performs scans on loopback. Chrome Identity continues to handle Gmail OAuth with the existing read-only scopes. Local scans, classification, redaction and review require no API keys.
+SentinelAI runs a React browser preview and a Chrome Manifest V3 extension. The Python API performs scans on loopback. Chrome Identity can enable an optional read-only Gmail inbox view in a configured build. Local scans, classification, redaction and review require no API keys.
 
-## Run locally
+## Install and run
 
-For the verified presentation sequence and build folder, see the [hackathon demo guide](DEMO_GUIDE.md). The [final audit](FINAL_AUDIT.md) records the test results and release limits.
+The [installation guide](INSTALL.md) covers the prebuilt Chrome ZIP and the source archive. Use the [demo guide](DEMO_GUIDE.md) for the rehearsed sequence and the [release report](RELEASE_REPORT.md) for model decisions and verification.
 
-Use Python 3.11–3.13. Run these commands from the repository root to start with separate runtime databases.
-
-~~~sh
-python3 -m venv .runtime/venv
-source .runtime/venv/bin/activate
-python -m pip install -r requirements.txt
-SENTINELAI_DB_PATH="$PWD/.runtime/sentinel_ai.db" \
-SENTINELAI_THREATS_PATH="$PWD/.runtime/sentinel_threats.db" \
-  python -m backend.server 8000
-~~~
-
-The API listens on 127.0.0.1:8000. The server command accepts a port argument. Match it in the popup's backend setting if you change it. The installed Gmail content script uses port 8000. Before pulling a version that removes database tracking, use SQLite's backup command to copy your local database outside the repository. Then set SENTINELAI_DB_PATH to the copy. Startup preserves rows when adjusting the schema.
-
-Build the extension from the repository root. On a fresh checkout install the locked npm dependencies first with `npm --prefix extension ci`.
+From a source checkout on macOS, run `bash start_backend.sh`. In a second terminal run:
 
 ~~~sh
+npm --prefix extension ci
 npm --prefix extension run build
-python -m http.server 4173 --bind 127.0.0.1 --directory extension/dist
+npm --prefix extension run preview
 ~~~
 
-Open [the browser preview](http://127.0.0.1:4173/popup.html). In Chrome, use **Load unpacked** in `chrome://extensions` and select `extension/dist`. After a rebuild, reload the extension and refresh open Gmail tabs. Live Gmail OAuth requires the existing Google project to authorize the extension ID and the test account.
+Open [the React web app](http://127.0.0.1:4173/popup.html). Enter an address in Shield or use Email Guard, Privacy and History. To install the extension, select `extension/dist` from **Load unpacked** in `chrome://extensions`. Email and active-tab URL inference also run in the installed extension when the API is stopped. The web app, privacy and history require the API.
+
+The web view and Chrome extension share the React frontend under `extension/src/popup`. This checkout contains those two entry points.
 
 ## Local API
 
@@ -72,7 +62,7 @@ Use --text with an approved masked-email export, or use --kind url or --kind web
 
 ~~~sh
 python -m unittest discover -s tests -v
-python -m pip install websocket-client==1.8.0
+python -m pip install -r requirements-test.txt
 python -m tests.browser_smoke extension/dist
 ~~~
 

@@ -152,7 +152,7 @@ export default function PrivacyGuardTab({ theme, mode, backendUrl }) {
             <line x1="12" y1="8" x2="12.01" y2="8" />
           </svg>
           <span>
-            <strong>Privacy Guard Note:</strong> Sentinel AI inspects inputs locally before transmission, shielding citizens from identity theft and unredacted PII exposure across form submissions and email drafts.
+            <strong>Privacy Guard:</strong> The local backend checks the text you enter here. In Gmail, use the compose panel to review and redact draft text.
           </span>
         </p>
       </div>

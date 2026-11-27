@@ -132,8 +132,10 @@ def main():
                 match = re.search(r"127\.0\.0\.1:(\d+)", line)
                 if not match:
                     raise RuntimeError("Local demo backend did not start.")
-                assert Path(env["SENTINELAI_DB_PATH"]).is_file() and Path(env["SENTINELAI_THREATS_PATH"]).is_file()
+                assert Path(env["SENTINELAI_DB_PATH"]).is_file()
                 run("http://127.0.0.1:" + match[1], (perf_counter() - start) * 1000)
+                # The optional review store is created on its first use.
+                assert Path(env["SENTINELAI_THREATS_PATH"]).is_file()
             finally:
                 server.terminate()
 

@@ -64,3 +64,19 @@ test('Google revocation carries the token in a POST body', async () => {
     assert.equal(options.redirect, 'error');
   } finally { fetch.mock.restore(); }
 });
+
+test('Google sign-in runs only when the extension was configured for OAuth', async () => {
+  const previousChrome = globalThis.chrome;
+  const getAuthToken = mock.fn((_options, callback) => callback('fixture-token'));
+  try {
+    globalThis.chrome = {identity: {getAuthToken}, runtime: {getManifest: () => ({})}};
+    await assert.rejects(() => gmail.getToken(), /unavailable/);
+    assert.equal(getAuthToken.mock.callCount(), 0);
+    chrome.runtime.getManifest = () => ({oauth2: {client_id: 'fixture-public-id'}});
+    assert.equal(await gmail.getToken(), 'fixture-token');
+    assert.equal(getAuthToken.mock.callCount(), 1);
+  } finally {
+    if (previousChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = previousChrome;
+  }
+});

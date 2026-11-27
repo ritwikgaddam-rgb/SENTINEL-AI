@@ -37,7 +37,8 @@ def export():
     for tree, in model_url._predictors:
         trees.append([[int(n["feature_idx"]), float(n["num_threshold"]), int(n["left"]), int(n["right"])]
                       if not n["is_leaf"] else [float(n["value"])] for n in tree.nodes])
-    regex_names = ("CREDENTIAL_REQUEST", "PRESSURE", "PAYMENT", "ACTION", "VERIFY", "NEGATION", "SECURITY_NOTICE")
+    regex_names = ("CREDENTIAL_REQUEST", "PRESSURE", "PAYMENT", "DISCLOSE", "DELIVERY", "OWN_SESSION", "ADVICE", "ISSUING",
+                   "CODE_CONTEXT", "CODE_REFERENCE", "ACTION", "VERIFY", "NEGATION", "SECURITY_NOTICE")
     filenames = ("email_phishing_model.joblib", "url_context_candidate.joblib")
     config = {"version": 1, "sha256": {f: sha256((ROOT / "models" / f).read_bytes()).hexdigest() for f in filenames},
               "email": {"intercept": float(linear.intercept_[0]), "terms": terms},

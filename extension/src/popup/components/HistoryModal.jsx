@@ -1,7 +1,8 @@
 import { localApi } from '../localApi';
+import { formatRiskIndex } from '../../inference/scoreLabel.mjs';
 import React, { useEffect, useState } from 'react';
 
-export default function HistoryModal({ isOpen, onClose, backendUrl, backendOnline }) {
+export default function HistoryModal({ isOpen, onClose, backendUrl }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState(false);
@@ -77,10 +78,10 @@ export default function HistoryModal({ isOpen, onClose, backendUrl, backendOnlin
                 </svg>
               </div>
               <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-main)' }}>
-                Backend Offline
+                History unavailable
               </div>
               <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                Start the backend in your terminal with <code>./start_backend.sh</code> on Mac/Linux or <code>start_backend.bat</code> on Windows to sync live threat history with the SQLite database.
+                Check the local backend and its SQLite storage, then retry the history request.
               </p>
               <button
                 className="btn-secondary"
@@ -115,7 +116,7 @@ export default function HistoryModal({ isOpen, onClose, backendUrl, backendOnlin
                 {item.target_preview}
               </div>
               <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>
-                {new Date(item.created_at).toLocaleString()} • {Number.isFinite(item.risk_score) ? "Risk Score: " + item.risk_score + "%" : "Score unavailable"}
+                {new Date(item.created_at).toLocaleString()} • {formatRiskIndex(item.risk_score)}
               </div>
             </div>
           ))}

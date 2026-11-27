@@ -1,50 +1,30 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 cd "$(dirname "$0")"
 
-# 1. Locate the best Python interpreter on the system (prefer Python 3.11-3.13)
-find_base_python() {
-  if [ -n "${SENTINELAI_PYTHON:-}" ] && command -v "$SENTINELAI_PYTHON" >/dev/null 2>&1; then
-    echo "$SENTINELAI_PYTHON"
-    return
-  fi
-  for py in "$HOME/.local/bin/python3.13" python3.13 python3.12 python3.11 python3 python; do
-    if command -v "$py" >/dev/null 2>&1; then
-      echo "$py"
-      return
+if [ -z "${SENTINELAI_PYTHON:-}" ]; then
+  for candidate in python3.13 python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 &&
+       "$candidate" -c 'import sys; raise SystemExit(not ((3, 11) <= sys.version_info[:2] <= (3, 13)))'; then
+      SENTINELAI_PYTHON="$candidate"
+      break
     fi
   done
-  echo "python3"
-}
-
-VENV_DIR=".venv"
-BASE_PY=$(find_base_python)
-
-# 2. Check if .venv exists and is valid on this machine
-REBUILD_VENV=0
-if [ -d "$VENV_DIR" ]; then
-  # Test if the virtualenv interpreter runs and isn't pointing to a non-existent foreign path
-  if ! "$VENV_DIR/bin/python" -c "import sys" >/dev/null 2>&1; then
-    echo "[Sentinel AI] Existing virtual environment is invalid or from another machine. Rebuilding..."
-    rm -rf "$VENV_DIR"
-    REBUILD_VENV=1
-  fi
-else
-  REBUILD_VENV=1
+fi
+if [ -z "${SENTINELAI_PYTHON:-}" ]; then
+  echo "Install Python 3.11, 3.12 or 3.13 and run this script again." >&2
+  exit 1
 fi
 
-if [ "$REBUILD_VENV" -eq 1 ]; then
-  echo "[Sentinel AI] Creating virtual environment using $BASE_PY..."
-  "$BASE_PY" -m venv "$VENV_DIR"
+# Keep the app's environment separate from any existing development environment.
+VENV_DIR=".runtime/app-venv"
+if [ ! -x "$VENV_DIR/bin/python" ]; then
+  "$SENTINELAI_PYTHON" -m venv "$VENV_DIR"
+fi
+PYTHON="$VENV_DIR/bin/python"
+if ! cmp -s requirements.txt "$VENV_DIR/installed-requirements.txt"; then
+  "$PYTHON" -m pip install -r requirements.txt
+  cp requirements.txt "$VENV_DIR/installed-requirements.txt"
 fi
 
-# 3. Ensure required packages are installed
-if ! "$VENV_DIR/bin/python" -c "import tldextract, bs4, joblib, sklearn, pandas" >/dev/null 2>&1; then
-  echo "[Sentinel AI] Installing dependencies from requirements.txt..."
-  "$VENV_DIR/bin/pip" install -q -r requirements.txt
-fi
-
-# 4. Start the Sentinel AI backend server
-PORT="${SENTINELAI_PORT:-8000}"
-echo "[Sentinel AI] Starting server on http://127.0.0.1:$PORT..."
-exec "$VENV_DIR/bin/python" backend/server.py "$PORT"
+exec "$PYTHON" -m backend.server "${SENTINELAI_PORT:-8000}"

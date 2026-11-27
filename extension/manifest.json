@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnulgd7zVOHjBSXYvP9MawFmUsUaZv9gW10IzOqbsxtjqQWmjlEmQ55Snu9Y6aEBN4VsgogKYTwo6XlzAjxQxifpHY3VdnN/seF0p71SUHtshLRg/9E6XUohG2lZF7dERO13drACsKlf59atjuQtGtRH2a8nlHo3Zw+XDaez/x/OKMcOddZ+liUPHt95CmAMwYs/9m0NE54Axdx0bMaK54YjC25UefaoahyioB2Zg+GJ/MDw2he8SPkwr48SYK/1T6n/GSqBjhrMBiXLnMMoHURKZeoIZ1q4lYVl6nvmBmqTzx0hToIY2zBg0CCNimXYNxm/M8oybS1adcT9z1yPX0wIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6irZj95cE3ANo1JurEUX4EL12zHGVpNlpzyhdbtT65P3xIXv8CaSnQsYpI3/U5m0fzTwnATs2mh8pHFVfgJxeKFdrqI9BFHOwMBwbewRxmd04QIX3b60Kxsp6c8LE14yqr5KS3Qk7NkLo3QSluzhplnVNPP+18BGzfDgn1+Dbqfau5+Z5WMdCp7dtVSdFOgLUPn/bJ/fU8Mzt84Q2x8lUrY05W770oVsJ/3dsTHBmIYK8q2BymioSejUyPVM8nB6p3lccdl25Qtv+Al29eScVNIBbG1OarCSZcedtIij45U4iCofr080VhTF2IVCox8Rr9X4wLATxYSyav+5rKUpNwIDAQAB",
   "name": "Sentinel AI - Phishing & Privacy Guard",
   "version": "1.0.0",
   "description": "Next-generation browser security and privacy guardian against phishing campaigns, social engineering, and identity data leaks.",
@@ -29,32 +29,24 @@
       "matches": [
         "https://mail.google.com/*"
       ],
-      "js": ["content.js"],
-      "css": ["gmailOverlay.css"],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "gmailOverlay.css"
+      ],
       "run_at": "document_idle"
     }
   ],
   "permissions": [
     "storage",
     "activeTab",
-    "contextMenus",
-    "identity"
+    "contextMenus"
   ],
-  "oauth2": {
-    "client_id": "1017067770103-h9p528629nnn3ffao3kfmr97r1lrgldg.apps.googleusercontent.com",
-    "scopes": [
-      "https://www.googleapis.com/auth/gmail.readonly",
-      "https://www.googleapis.com/auth/userinfo.email",
-      "https://www.googleapis.com/auth/userinfo.profile"
-    ]
-  },
   "host_permissions": [
     "http://127.0.0.1:8000/*",
     "http://localhost:8000/*",
-    "https://mail.google.com/*",
-    "https://gmail.googleapis.com/*",
-    "https://people.googleapis.com/*",
-    "https://oauth2.googleapis.com/*"
+    "https://mail.google.com/*"
   ],
   "web_accessible_resources": [
     {
@@ -63,7 +55,9 @@
         "logos/*.png",
         "gmailOverlay.css"
       ],
-      "matches": ["https://mail.google.com/*"]
+      "matches": [
+        "https://mail.google.com/*"
+      ]
     }
   ]
 }

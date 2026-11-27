@@ -19,12 +19,14 @@ function googleFetch(url, token) {
 
 // ─── Token Management ───────────────────────────────────────────────────────
 
+export function gmailSignInConfigured() {
+  return Boolean(globalThis.chrome?.identity?.getAuthToken &&
+    globalThis.chrome.runtime?.getManifest?.()?.oauth2?.client_id);
+}
+
 export async function getToken(interactive = true) {
+  if (!gmailSignInConfigured()) throw new Error('Gmail sign-in is unavailable in this build.');
   return new Promise((resolve, reject) => {
-    if (typeof chrome === 'undefined' || !chrome.identity) {
-      reject(new Error('chrome.identity is not available outside the extension.'));
-      return;
-    }
     chrome.identity.getAuthToken({ interactive }, (token) => {
       if (chrome.runtime.lastError || !token) {
         reject(new Error(chrome.runtime.lastError?.message || 'Failed to get auth token.'));

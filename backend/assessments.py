@@ -19,12 +19,27 @@ LINK = re.compile(r"https?://[^\s<>\"']+", re.I)
 MAX_LINKS = 40
 
 CREDENTIAL_REQUEST = re.compile(
-    r"\b(?:send|share|reply with|provide|submit|enter|confirm|give)\s+(?:(?:me|us)\s+)?"
-    r"(?:(?:your|the)\s+)?(?:(?:current|full|account)\s+)?"
+    r"\b(?:send|share|forward|(?:email|text)(?=\s+(?:me|us|your|the|this)\b)|"
+    r"reply with|provide|submit|enter|confirm|give)\s+(?:(?:me|us)\s+)?"
+    r"(?:(?:your|the|this)\s+)?(?:(?:current|full|account)\s+)?"
     r"(?:password|passphrase|(?:one[- ]time|verification|security) code|OTP|CVV|"
     r"credit card number|bank details|Aadhaar number|social security number)\b"
     r"(?!\s+(?:reset|change|update|policy)\b)", re.I
 )
+# Export these same patterns to the standalone scanner. Evaluate each request
+# separately so advice in one clause cannot cancel a later disclosure request.
+DISCLOSE = re.compile(r"^(?:send|share|forward|email|text|reply with|give)\b|\b(?:me|us)\b", re.I)
+DELIVERY = re.compile(r"^\s+(?:(?:to|with)\s+(?:us|me|our\s+(?:team|agent)|the\s+agent)|(?:by|via|in)\s+(?:an?\s+)?(?:reply|email|text|chat|call))\b", re.I)
+OWN_SESSION = re.compile(
+    r"^\s+(?:only\s+)?(?:in|on|into)\s+(?:the|your)\s+"
+    r"(?:(?:sign[- ]in|verification|login)\s+)?(?:page|window|screen|app|session|browser)"
+    r"\s+(?:that\s+)?you\s+(?:already\s+)?(?:opened|started|requested|initiated)\b", re.I)
+ADVICE = re.compile(
+    r"\b(?:never|do not|don['’]{1,2}t|will not|won['’]{1,2}t|should not|shouldn['’]{1,2}t|avoid|refuse to)\s+"
+    r"(?:(?:ever|ask|anyone|you|us|to|be|asked|for|send|share|give|or)\s+){0,7}$", re.I)
+ISSUING = re.compile(r"\b(?:we|we will|we can|we['’]ll|the service will)\s+$", re.I)
+CODE_CONTEXT = re.compile(r"\b(?:verification|security|authentication|one[- ]time) code\b|\bOTP\b", re.I)
+CODE_REFERENCE = re.compile(r"\b(?:send|share|forward|reply with|enter|provide)\s+(?:(?:me|us)\s+)?(?:this|that|the|your) code\b", re.I)
 PRESSURE = re.compile(r"\b(?:act now|respond immediately|final (?:notice|warning)|"
                       r"within \d{1,3} (?:hours?|minutes?)|(?:account|access) (?:will be|has been) "
                       r"(?:suspended|disabled|locked))\b", re.I)
@@ -261,16 +276,39 @@ def observed_requests(text, pattern):
     return ""
 
 
+def credential_context(text):
+    """Return direct disclosure, ambiguous entry, or no request for each section."""
+    entry = ""
+    matches = list(CREDENTIAL_REQUEST.finditer(text))
+    matches.extend(m for m in CODE_REFERENCE.finditer(text)
+                   if CODE_CONTEXT.search(text[max(0, m.start() - 220):m.start()]))
+    for match in matches:
+        before = text[max(0, match.start() - 100):match.start()]
+        if ADVICE.search(before) or ISSUING.search(before):
+            continue
+        after = text[match.end():match.end() + 150]
+        if DISCLOSE.search(match.group()) or DELIVERY.search(after):
+            return "credential_request", match.group()
+        if not OWN_SESSION.search(after):
+            entry = match.group()
+    return ("credential_entry", entry) if entry else ("", "")
+
+
 def email_evidence(text, sender="", links=(), subject="", reply_to="", html="", labels=()):
     subject_links = [match.group().rstrip(".,;!?)") for match in LINK.finditer(subject)]
     text, links, limited = link_items(text, html, [*links, *subject_links])
     prose = QUOTED_LINES.sub("", text)
     markers = []
-    for category, section_text in (("body", prose), ("subject", subject)):
-        if match := observed_requests(section_text, CREDENTIAL_REQUEST):
-            markers.append(marker("credential_request", "Direct request for sensitive information",
-                                  "The message asks the recipient to provide a credential or private identifier.",
-                                  "high", category, excerpt=match))
+    requests = [(credential_context(section), category) for section, category in ((prose, "body"), (subject, "subject"))]
+    for kind in ("credential_request", "credential_entry"):
+        hit = next(((phrase, category) for (code, phrase), category in requests if code == kind), None)
+        if hit:
+            phrase, category = hit
+            direct = kind == "credential_request"
+            markers.append(marker(kind, "Direct request for sensitive information" if direct else "Credential entry context unknown",
+                                  "The message asks you to disclose sensitive information." if direct else
+                                  "The message mentions entering a credential. Verify where you initiated the sign-in.",
+                                  "high" if direct else "low", category, excerpt=phrase))
             break
     pressure = PRESSURE.search(subject)
     section = "subject"
@@ -324,6 +362,8 @@ def email_evidence(text, sender="", links=(), subject="", reply_to="", html="", 
     for link in links:
         result = url_evidence(link["url"])
         link.update({key: result[key] for key in ("url", "markers", "assessment", "registrable_domain")})
+        link["sender_domain_relation"] = (("same" if registrable(domain) == result["registrable_domain"] else "different")
+                                          if domain else "unknown")
         displayed_host = link.get("displayed_hostname")
         if displayed_host:
             # Displayed URLs may also contain private parameters.
@@ -349,6 +389,10 @@ def email_evidence(text, sender="", links=(), subject="", reply_to="", html="", 
         (pressure and payment) or (links and verify and (link_warnings or sender_mismatch))
         or (payment and sender_mismatch)
     )
+    entry = "credential_entry" in signals
+    different_host = any(link["sender_domain_relation"] == "different" for link in links)
+    if entry and (link_warnings or (sender_mismatch and different_host)):
+        flagged = True
     # Sparse text with no independent context does not support a clean result.
     word_variety = len(set(re.findall(r"\b[^\W\d_]{3,}\b", prose.casefold())))
     context = bool(domain or links or subject or re.search(r"[.!?]\s+\w", prose))

@@ -61,6 +61,16 @@ class LocalHTTPTests(unittest.TestCase):
         status, _, _ = self.request("POST", "/api/privacy-redact", "sample", **{"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
 
+    def test_release_accepts_current_extension_and_rejects_retired_origin(self):
+        self.assertTrue(server.EXTENSION_ID)
+        current = f"chrome-extension://{server.EXTENSION_ID}"
+        status, headers, _ = self.request("GET", "/api/health", Origin=current)
+        self.assertEqual((status, headers["Access-Control-Allow-Origin"]), (200, current))
+        retired = "chrome-extension://gdjpcobloppjokojdgcidaopbpnfmoki"
+        status, headers, _ = self.request("GET", "/api/health", Origin=retired)
+        self.assertEqual(status, 403)
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+
     def test_parallel_privacy_audits_and_large_preview(self):
         body = json.dumps({"text": "Contact demo@example.org"})
         with ThreadPoolExecutor(max_workers=8) as pool:

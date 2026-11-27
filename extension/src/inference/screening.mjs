@@ -46,42 +46,37 @@ function observation(probability, model) {
     prediction: probability > .5 ? 'phishing' : 'legitimate' };
 }
 
-function assess(markers, confirmed, enough, probability, weight, linkProbability = 0, writing = 0, url = false) {
+function assess(markers, confirmed, enough, probability, weight, linkProbability = 0, url = false) {
   const groups = new Map();
+  const ambiguousEntry = markers.some(m => m.id === 'credential_entry');
   for (const item of markers) {
+    if (item.id === 'credential_entry') continue;
     const strength = item.id === 'insecure_http' ? .06 : {low: .06, medium: .27, high: .91}[item.severity];
-    groups.set(item.category, Math.max(strength, groups.get(item.category) || 0));
+    const group = ['body','subject'].includes(item.category) && ['pressure','security_notice_subject'].includes(item.id)
+      ? 'security_event' : item.category;
+    groups.set(group, Math.max(strength, groups.get(group) || 0));
   }
   let evidence = 1 - [...groups.values()].reduce((left, v) => left * (1 - v), 1);
   if (confirmed) evidence = Math.max(.91, evidence);
-  if (evidence >= .27) evidence += (1 - evidence) * Math.min(writing / 100, .06);
   const learned = Math.max(probability, .55 * linkProbability);
-  const risk = enough || confirmed ? round1(100 * (evidence + (1 - evidence) * weight * learned)) : null;
+  let risk = enough || confirmed ? round1(100 * (evidence + (1 - evidence) * weight * learned)) : null;
   let level = 'safe', label = 'No clear phishing indicators detected';
   let explanation = 'The score summarizes the available signals. Verify unexpected requests independently.';
   if (confirmed || (risk !== null && evidence >= .27 && risk >= 58)) {
     level = 'danger'; label = 'Suspicious'; explanation = 'Verify this request through a separate trusted channel.';
   } else if (risk !== null && ((evidence >= .27 && risk >= 40) || (url && probability > .5))) {
     level = 'suspicious'; label = 'Caution advised'; explanation = 'The available model and structural signals warrant a closer look.';
-  } else if (risk === null) {
-    level = 'unknown'; label = 'Insufficient information'; explanation = 'The message lacks enough context for a screening score.';
+  } else if (risk === null || ambiguousEntry) {
+    risk = null;
+    level = 'unknown'; label = 'Insufficient information'; explanation = ambiguousEntry
+      ? 'The message mentions entering a credential. Open the service independently to verify the destination.'
+      : 'The message lacks enough context for a screening score.';
   }
   if (!markers.length || level === 'unknown' || level === 'safe') {
     markers.unshift(marker('assessment_summary', label, explanation, 'low', 'assessment'));
   }
-  return {risk_level: level, assessment: label, explanation, markers, risk_score: risk,
+  return {score_kind: 'screening_index', risk_level: level, assessment: label, explanation, markers, risk_score: risk,
     safety_score: risk === null ? null : round1(100 - risk), ml_evaluated: true, inference_source: 'packaged_model'};
-}
-
-function writingRate(text) {
-  const mask = s => ' '.repeat(s.length);
-  const prose = text.replace(webLink, mask).replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, mask)
-    .replace(/```[\s\S]*?```|^--\s*$[\s\S]*/gm, mask).replace(/^[ \t]*>[^\n]+/gm, mask);
-  const n = (prose.match(words) || []).length;
-  const rules = [/\b(?:recieve|teh|definately|seperate)\b/gi, /\b(?:your account|the account|it)\s+have(?=\s+been\b)/gi,
-    /\b(?:I|you|we|they)\s+has(?=\s+[a-z]+(?:ed|en)\b)/gi, /\b([a-z]{2,})[ \t]+\1\b/gi, /[!?]{3,}/g,
-    /\b[A-Z]{4,}(?:[ \t]+[A-Z]{4,}){2,}\b/g];
-  return n ? Math.round(10000 * rules.reduce((v, r) => v + (prose.match(r) || []).length, 0) / n) / 100 : 0;
 }
 
 export function createScanner(config, suffixText) {
@@ -118,7 +113,9 @@ export function createScanner(config, suffixText) {
     return simple !== label && brands.some(([name]) => name.toLowerCase() === simple);
   }
   function urlDetails(value, assume = false) {
-    if (typeof value !== 'string' || value.length > 2083 || /[\s\\\x00-\x1f]/.test(value)) throw Error('Invalid URL.');
+    if (typeof value !== 'string' || value.length > 2083) throw Error('Invalid URL.');
+    value = value.trim();
+    if (/[\s\\\x00-\x1f]/.test(value)) throw Error('Invalid URL.');
     if (assume && !value.includes('://')) value = 'https://' + value;
     const u = new URL(value);
     if (!/^https?:$/.test(u.protocol)) throw Error('Invalid URL.');
@@ -163,7 +160,7 @@ export function createScanner(config, suffixText) {
   }
   function scanUrl(url) {
     const link = urlDetails(url.trim(), true);
-    return {...link, ...assess(link.markers, link.hidden, true, link.model_observation.phishing_probability, .70, 0, 0, true)};
+    return {...link, ...assess(link.markers, link.hidden, true, link.model_observation.phishing_probability, .70, 0, true)};
   }
   function scanEmail({text = '', subject = '', sender = '', reply_to = '', links = []}) {
     const prose = text.replace(/^[ \t]*>[^\n]+/gm, '');
@@ -177,8 +174,22 @@ export function createScanner(config, suffixText) {
       }
       return false;
     }
-    const cred = requested(prose, patterns.CREDENTIAL_REQUEST) ? 'body' : requested(subject, patterns.CREDENTIAL_REQUEST) && 'subject';
+    let cred = '', entry = '';
+    for (const [section, category] of [[prose, 'body'], [subject, 'subject']]) {
+      const matches = [...section.matchAll(new RegExp(patterns.CREDENTIAL_REQUEST.source, 'gi'))];
+      for (const m of section.matchAll(new RegExp(patterns.CODE_REFERENCE.source, 'gi'))) {
+        if (patterns.CODE_CONTEXT.test(section.slice(Math.max(0, m.index - 220), m.index))) matches.push(m);
+      }
+      for (const m of matches) {
+        const before = section.slice(Math.max(0, m.index - 100), m.index);
+        if (patterns.ADVICE.test(before) || patterns.ISSUING.test(before)) continue;
+        const after = section.slice(m.index + m[0].length, m.index + m[0].length + 150);
+        if (patterns.DISCLOSE.test(m[0]) || patterns.DELIVERY.test(after)) cred ||= category;
+        else if (!patterns.OWN_SESSION.test(after)) entry ||= category;
+      }
+    }
     if (cred) add('credential_request', 'Direct request for sensitive information', cred, 'high');
+    else if (entry) add('credential_entry', 'Credential entry context unknown', entry, 'low');
     const pressure = patterns.PRESSURE.test(subject) ? 'subject' : patterns.PRESSURE.test(prose) && 'body';
     if (pressure) add('pressure', 'Pressure or account restriction claim', pressure);
     const payment = requested(prose, patterns.PAYMENT) ? 'body' : requested(subject, patterns.PAYMENT) && 'subject';
@@ -213,14 +224,21 @@ export function createScanner(config, suffixText) {
       } catch { /* Unsupported or malformed destination. Never visit it. */ }
     }
     const items = [...found.values()];
+    for (const link of items) {
+      link.sender_domain_relation = !domain ? 'unknown' : domainParts(domain).reg === link.registrable_domain ? 'same' : 'different';
+    }
     const deceptive = items.some(l => l.hidden || l.labelMismatch);
     if (deceptive) add('link_deception', 'Deceptive destination structure', 'link', 'high');
     const warning = items.some(l => l.markers.some(m => ['lookalike_domain','brand_in_subdomain','raw_ip_domain','shortener'].includes(m.id)));
-    const confirmed = cred || deceptive || (pressure && payment) || (payment && mismatch) || (items.length && requested(prose, patterns.VERIFY) && (warning || mismatch));
+    const confirmed = cred || deceptive || (entry && (warning || (mismatch && items.some(l => l.sender_domain_relation === 'different')))) || (pressure && payment) || (payment && mismatch) || (items.length && requested(prose, patterns.VERIFY) && (warning || mismatch));
     const variety = new Set((prose.toLowerCase().match(words) || []).filter(t => /^\p{L}{3,}$/u.test(t))).size;
     const enough = markers.length || items.length || (variety >= 7 && (domain || subject || /[.!?]\s+[\p{L}\p{N}_]/u.test(prose)));
     const prob = emailProbability(text, config.email);
-    const result = assess(markers, confirmed, enough, prob, .25, Math.max(0, ...items.map(l => l.model_observation.phishing_probability)), writingRate(text));
+    const result = assess(markers, confirmed, enough, prob, .25, Math.max(0, ...items.map(l => l.model_observation.phishing_probability)));
+    if (result.safety_score !== null) {
+      result.markers.push(marker('score_meaning', 'About this score',
+        'This screening index combines model output and observed signals. The probability that this message is safe is unknown.', 'low', 'assessment'));
+    }
     result.markers.push(marker('standalone_analysis', 'On-device analysis', 'Packaged email and link models ran locally. History, privacy checks and live reputation are unavailable in this mode.', 'low', 'availability'));
     return {...result, model_observation: observation(prob, 'email-tfidf-v1'), links: items, links_limited: limited,
       sender: {domain, reply_to_domain: replyDomain, authentication: 'unavailable'}, persistence: {history: 'unavailable'}};

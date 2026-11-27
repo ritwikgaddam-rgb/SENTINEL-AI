@@ -160,6 +160,10 @@ def legacy_scan_response(result, gmail=False):
             "id": "assessment_summary", "title": result["assessment"],
             "description": result["explanation"], "severity": "medium" if level == "suspicious" else "low",
         }, *indicators]
+    if "sender" in result and result["safety_score"] is not None:
+        indicators = [*indicators, {"id": "score_meaning", "title": "About this score",
+                      "description": "This screening index combines model output and observed signals. The probability that this message is safe is unknown.",
+                      "severity": "low"}]
     # The installed Gmail content script renders legacy marker strings as HTML.
     markers = [{
         "id": item["id"], "title": escape(item["title"]), "description": escape(item["description"]),
@@ -385,6 +389,11 @@ class SentinelHTTPServer(ThreadingHTTPServer):
 
 
 def run_server(port=8000):
+    # Load the fixed local artifacts before accepting the first health request.
+    # A clean environment can spend several seconds importing sklearn.
+    # The cached loaders report missing or corrupt artifacts as unavailable.
+    email_model()
+    candidate()
     with SentinelHTTPServer(("127.0.0.1", port), SentinelAPIHandler) as httpd:
         optional_store(init_db)
         # The review store initializes on first use and is optional for scanning.

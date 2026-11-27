@@ -91,8 +91,8 @@ export function handleScan(message, sender, respond) {
     const result = await scan(message.kind, origin, payload(message.kind, message.input));
     if (gmail) {
       // The content script only needs the public verdict, never the private backend payload.
-      const {risk_level, safety_score, assessment, markers, private_items_count, inference_source} = result;
-      return {risk_level, safety_score, assessment, markers: markers.map(({id, title, description, severity}) =>
+      const {risk_level, risk_score, safety_score, assessment, markers, private_items_count, inference_source} = result;
+      return {risk_level, risk_score, safety_score, assessment, markers: markers.map(({id, title, description, severity}) =>
         ({id, title, description, severity})), private_items_count, inference_source};
     }
     return result;

@@ -520,7 +520,9 @@ def choose_oof_threshold(labels, oof_probabilities, ham_probabilities=(), target
     oof_p = np.asarray(oof_probabilities)
     ham_p = np.asarray(ham_probabilities) if len(ham_probabilities) > 0 else np.array([])
 
-    thresholds = np.r_[0., np.unique(oof_p), 1.]
+    # Alerts use strict >. The largest benign guard score is itself a valid
+    # cutoff, even when no validation example has that exact score.
+    thresholds = np.unique(np.r_[0., oof_p, ham_p, 1.])
 
     def at(t):
         alerts = oof_p > t
@@ -867,14 +869,7 @@ def frame(rows, context=False, structural=False):
 
 
 def choose_threshold(labels, probability, ham_probability):
-    # Select strictly on validation. Report the realized rate at the locked cut.
-    thresholds = np.r_[0., np.unique(probability), 1.]
-    def at(threshold):
-        alerts = probability > threshold
-        return (np.mean(alerts[labels == 0]), np.mean(alerts[labels == 1]), np.mean(ham_probability > threshold))
-    viable = [(recall, -fpr, -short_fpr, float(t)) for t in thresholds
-              for fpr, recall, short_fpr in (at(t),) if fpr <= FALSE_POSITIVE_BUDGET and short_fpr == 0]
-    return max(viable)[-1]
+    return choose_oof_threshold(labels, probability, ham_probability, target_fpr=FALSE_POSITIVE_BUDGET)
 
 
 def score_set(labels, probabilities, threshold, *, raw=False):

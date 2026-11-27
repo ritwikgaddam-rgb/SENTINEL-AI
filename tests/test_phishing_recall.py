@@ -55,6 +55,17 @@ class EmailAlertRegressionTests(unittest.TestCase):
 
 
 class EmailEvaluationTests(unittest.TestCase):
+    def test_guard_maximum_can_be_the_only_useful_cutoff(self):
+        labels = np.array([0, 0, 1, 1])
+        scores = np.array([0.12, 0.26, 0.46, 0.93])
+        guard = np.array([0.25, 0.81])
+        for choose in (choose_oof_threshold, choose_threshold):
+            with self.subTest(selector=choose.__name__):
+                threshold = choose(labels, scores, guard)
+                self.assertEqual(threshold, max(guard))
+                np.testing.assert_array_equal(scores > threshold, [False, False, False, True])
+                self.assertFalse((guard > threshold).any())
+
     def test_threshold_respects_false_positive_budget_and_short_mail(self):
         labels = np.array([0] * 20 + [1, 1, 1])
         scores = np.array([0.1] * 18 + [0.5, 0.8, 0.4, 0.9, 0.95])

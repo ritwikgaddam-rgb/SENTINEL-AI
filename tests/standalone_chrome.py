@@ -34,6 +34,7 @@ CASES = [
      "links": [{"url": "https://example.org/read", "label": "Reading"}, {"url": "https://example.net/list", "label": "List"}]},
     {"text": "Hello", "subject": ""},
 ]
+CONTEXT_CASES = json.loads((Path(__file__).parent / "fixtures/credential_context.json").read_text())
 
 
 def listening():
@@ -202,6 +203,12 @@ def run(bundle, replay, results):
             with backend(tmp / "history.db", tmp / "threats.db"):
                 browser.setup(bundle)
                 assert browser.scan(CASES[0])["inference_source"] == "loopback"
+                for case in CONTEXT_CASES:
+                    result = browser.scan(case)
+                    assert (result["inference_source"], result["risk_level"]) == ("loopback", case["expected"]), case["case"]
+                connected_gmail = browser.gmail([CONTEXT_CASES[i] for i in (0, 3, 4)])
+                classes = connected_gmail.evaluate("[...document.querySelectorAll('.adn .sentinel-gmail-bar')].map(b => b.className.split(' ').at(-1))")
+                assert classes == ["safe", "unknown", "danger"], classes
                 compose = browser.gmail(CASES[:1])
                 exercise_compose(compose)
                 verify_privacy_matrix(compose)
@@ -209,10 +216,13 @@ def run(bundle, replay, results):
             assert not subprocess.run(["lsof", "-nP", "-iTCP:8000", "-sTCP:LISTEN"], capture_output=True).stdout
             r = browser.scan(CASES[1])
             assert r["inference_source"] == "packaged_model" and r["risk_level"] == "danger"
-            page = browser.gmail(CASES)
+            gmail_cases = [CONTEXT_CASES[i] for i in (0, 3, 4)]
+            page = browser.gmail(CASES + gmail_cases)
             classes = page.evaluate("[...document.querySelectorAll('.adn .sentinel-gmail-bar')].map(b => [b.className,b.querySelector('.sentinel-bar-score').textContent])")
-            assert ['safe', 'danger', 'safe', 'unknown'] == [x[0].split()[-1] for x in classes], classes
-            assert all('% Safe' in x[1] for x in classes[:3])
+            expected = ['safe', 'danger', 'safe', 'unknown', *(c['expected'] for c in gmail_cases)]
+            assert expected == [x[0].split()[-1] for x in classes], classes
+            assert all(x[1].startswith('Risk index ') and x[1].endswith('/100') for x in classes[:3])
+            assert classes[3][1] == 'Score unavailable' and classes[5][1] == 'Score unavailable'
             print("Offline Gmail fixture", classes, flush=True)
         finally:
             browser.close()
@@ -226,15 +236,24 @@ def run(bundle, replay, results):
             assert first["ml_evaluated"] and first["inference_source"] == "packaged_model"
             assert any(x[3].endswith('models/screening.json') for x in browser.requests)
             browser.popup.button("Email Guard")
+            if not browser.popup.evaluate("Boolean(chrome.runtime.getManifest().oauth2)"):
+                browser.popup.until("""[...document.querySelectorAll('button')].some(
+                    button => button.textContent.trim() === 'Sign in with Google' && button.disabled
+                )""")
             browser.popup.field("textarea.textarea-clean", CASES[1]["text"])
             browser.popup.button("Analyze for Phishing & Leaks")
-            browser.popup.until("document.querySelector('.status-badge.danger') && document.querySelector('.score-pill').textContent.includes('% Safe')")
+            browser.popup.until("document.querySelector('.status-badge.danger') && document.querySelector('.score-pill').textContent.startsWith('Risk index ')")
             mark = len(browser.requests)
             for c in CASES:
                 r = browser.scan(c)
                 expected = server.predict_email_risk(c['text'], links=c.get('links', []), subject=c['subject'])
                 assert r["risk_level"] == expected["display_level"] and r["safety_score"] == expected["safety_score"]
                 assert abs(r["model_observation"]["phishing_probability"] - expected["model_observation"]["phishing_probability"]) < 1e-12
+            for case in CONTEXT_CASES:
+                r = browser.scan(case)
+                assert (r["inference_source"], r["risk_level"]) == ("packaged_model", case["expected"]), case["case"]
+                if r["safety_score"] is not None:
+                    assert any(m["id"] == "score_meaning" for m in r["markers"])
             assert len(browser.scan(CASES[2])["links"]) == 2
             for url in ('https://www.amazon.com/', 'https://www.flipkart.com/', 'https://www.youtube.com/', 'https://example.org/test'):
                 r = browser.scan({"url": url}, "url")
@@ -256,16 +275,20 @@ def run(bundle, replay, results):
                       "warm_http_requests": 0}
             if replay:
                 from collections import defaultdict
-                from training.train_reviewed_features import evaluate
+                from training.context_study import stats
                 import numpy as np
                 rows = [json.loads(s) for s in replay.read_text().splitlines()]
                 scored = defaultdict(list)
                 python_times = []
                 for start in range(0, len(rows), 8):
                     batch = rows[start:start+8]
-                    inputs = [dict(text=r["body"], subject=r["subject"], sender=r["sender"], links=r["links"], reply_to=r["reply_to"]) for r in batch]
+                    # Gmail truncates by UTF-16 units. Feed both scanners the same
+                    # bounded message and leave any partial surrogate out of it.
+                    inputs = [dict(text=r["body"].encode("utf-16-le", "surrogatepass")[:40000].decode("utf-16-le", "ignore"),
+                                   subject=r["subject"], sender=r["sender"], links=r["links"], reply_to=r["reply_to"])
+                              for r in batch]
                     out = browser.popup.evaluate("""(async inputs => {const out = []; for (const input of inputs) {
-                        input.text = input.text.slice(0,20000); const r = await chrome.runtime.sendMessage({type:'SCREEN',kind:'email',input});
+                        const r = await chrome.runtime.sendMessage({type:'SCREEN',kind:'email',input});
                         out.push([r.risk_level,r.risk_score,r.model_observation?.phishing_probability,r.inference_source]);} return out;} )(""" + json.dumps(inputs) + ")")
                     for r, x, js in zip(batch, inputs, out):
                         assert js[3] == "packaged_model" and js[2] is not None, (r["set"], start)
@@ -276,8 +299,12 @@ def run(bundle, replay, results):
                 report["python_median_ms"] = median(python_times)
                 for cohort, pairs in scored.items():
                     y, js, py, pj, pp, sj, sp = zip(*pairs)
-                    sub = evaluate(y, [v in ("danger","suspicious") for v in js])
-                    sub.update(raw=evaluate(y, np.array(pj) > .5, np.array(pj)), max_probability_error=float(max(abs(a-b) for a,b in zip(pj,pp))),
+                    sub = stats(y, [v in ("danger","suspicious") for v in js])
+                    sub["display_by_label"] = {
+                        label: dict(Counter(level for actual, level in zip(y, js) if actual == value))
+                        for value, label in ((0, "legitimate"), (1, "phishing"))
+                    }
+                    sub.update(raw=stats(y, np.array(pj) > .5, np.array(pj)), max_probability_error=float(max(abs(a-b) for a,b in zip(pj,pp))),
                                verdict_differences=sum(a!=b for a,b in zip(js,py)), risk_differences=sum(a!=b for a,b in zip(sj,sp)),
                                max_risk_error=max((abs(a-b) for a,b in zip(sj,sp) if a is not None and b is not None), default=0),
                                abstentions=Counter(js)["unknown"])

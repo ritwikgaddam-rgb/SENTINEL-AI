@@ -38,17 +38,20 @@ def apply_score(result, observation, weight, enough=True, link_probability=0, mo
     """Use the learned signal as part of the index, bounded by independent evidence."""
     strength = {"low": 0.06, "medium": 0.27, "high": 0.91, "danger": 0.91}
     independent = {}
+    ambiguous_entry = any(m["id"] == "credential_entry" for m in result["markers"])
     for item in result["markers"]:
+        if item["id"] == "credential_entry":
+            continue
         category = item["category"]
+        if category in ("subject", "body"):
+            # A repeated security event in the subject and body is one observation.
+            category = "security_event" if item["id"] in {"pressure", "security_notice_subject"} else category
         weight_for_marker = .06 if item["id"] == "insecure_http" else strength.get(item["severity"], 0)
         independent[category] = max(independent.get(category, 0), weight_for_marker)
     evidence = 1 - prod(1 - value for value in independent.values())
     confirmed = result["risk_level"] == "suspicious"
     if confirmed:
         evidence = max(evidence, 0.91)
-    if evidence >= .27:
-        writing = result.get("grammar", {}).get("per_100_words") or 0
-        evidence += (1 - evidence) * min(writing / 100, .06)
 
     probability = observation.get("phishing_probability")
     risk = None
@@ -67,15 +70,18 @@ def apply_score(result, observation, weight, enough=True, link_probability=0, mo
     elif probability is None:
         level, label, display = "uncertain", "Analysis unavailable", "unknown"
         explanation = "The local model did not provide a valid prediction. Evidence findings are shown separately."
-    elif risk is None:
+    elif risk is None or ambiguous_entry:
+        risk = None
         level, label, display = "uncertain", "Insufficient information", "unknown"
-        explanation = "The message lacks enough context for a screening score."
+        explanation = ("The message mentions entering a credential. Open the service independently to verify the destination."
+                       if ambiguous_entry else
+                       "The message lacks enough context for a screening score.")
     else:
         level, label, display = "neutral", "No clear phishing indicators detected", "safe"
         explanation = "The score summarizes the available signals. Verify unexpected requests independently."
     if confirmed and probability is None:
         explanation += " The local model is unavailable."
-    result.update(risk_level=level, assessment=label, display_level=display, explanation=explanation,
+    result.update(score_kind="screening_index", risk_level=level, assessment=label, display_level=display, explanation=explanation,
                   risk_score=risk, safety_score=round(100-risk, 1) if risk is not None else None,
                   prediction=observation.get("prediction"), confidence=None)
     return result

@@ -86,8 +86,8 @@ import { attachComposePrivacy } from "./composePrivacy";
       }));
       const analysis = await analyzeEmail(text.slice(0, 20000), sender.slice(0, 500), subject, links);
       const risk = ["safe", "suspicious", "danger"].includes(analysis.risk_level) ? analysis.risk_level : "unknown";
-      const score = Number.isFinite(analysis.safety_score) && analysis.safety_score >= 0 && analysis.safety_score <= 100
-        ? analysis.safety_score + "% Safe" : "Score unavailable";
+      const score = Number.isFinite(analysis.risk_score) && analysis.risk_score >= 0 && analysis.risk_score <= 100
+        ? "Risk index " + analysis.risk_score + "/100" : "Score unavailable";
       const markers = Array.isArray(analysis.markers)
         ? analysis.markers.filter(item => item && typeof item.description === 'string').slice(0, 32)
         : [];

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import MarkersCard from './MarkersCard';
 import LogoLoader from './LogoLoader';
 import { fetchRecentEmails, scanEmailWithBackend } from '../gmailApi';
+import { formatRiskIndex } from '../../inference/scoreLabel.mjs';
 
 // ─── Risk level helper ───────────────────────────────────────────────────────
 // ─── Risk level helper ───────────────────────────────────────────────────────
@@ -15,10 +16,6 @@ function getRiskColor(level, theme, mode) {
 
 function unavailableScan() {
   return { risk_level: 'unknown', assessment: 'Analysis unavailable', safety_score: null, markers: [] };
-}
-
-function scoreLabel(result) {
-  return Number.isFinite(result.safety_score) ? result.safety_score + '% Safe' : 'Score unavailable';
 }
 
 // ─── Single email result card ────────────────────────────────────────────────
@@ -68,7 +65,7 @@ function InboxEmailRow({ email, onSelect, isSelected, theme, mode }) {
 }
 
 // ─── Main component ──────────────────────────────────────────────────────────
-export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, accessToken, onSignIn, authLoading }) {
+export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, accessToken, onSignIn, authLoading, gmailConfigured }) {
   // Manual paste scanner state
   const [emailText, setEmailText]     = useState('');
   const [sender, setSender]           = useState('');
@@ -216,14 +213,14 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
             <div style={{ textAlign: 'center' }}>
               <img src={logoSrc} alt="Sentinel AI" style={{ height: '36px', width: 'auto', display: 'block', margin: '0 auto 8px' }} />
               <p style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45, maxWidth: '240px' }}>
-                Sign in with Google to automatically scan your Gmail inbox for phishing threats.
+                {gmailConfigured ? 'Sign in with Google to scan your Gmail inbox.' : 'Google sign-in requires a configured extension build. Manual scanning is available below.'}
               </p>
             </div>
             <button
               className="btn-primary"
               style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: '14px', paddingRight: '14px' }}
               onClick={onSignIn}
-              disabled={authLoading}
+              disabled={authLoading || !gmailConfigured}
             >
               {authLoading ? (
                 <>
@@ -323,7 +320,7 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
                           <span className={`status-badge ${detailResult.risk_level}`}>
                             {detailResult.risk_level === 'danger' ? 'Phishing Threat' : detailResult.risk_level === 'suspicious' ? 'Suspicious' : detailResult.risk_level === 'safe' ? 'No clear indicators' : 'No score'}
                           </span>
-                          <span className="score-pill">{scoreLabel(detailResult)}</span>
+                          <span className="score-pill">{formatRiskIndex(detailResult.risk_score)}</span>
                         </div>
                         <h4 className="status-title">{selectedEmail.subject}</h4>
                         <p className="status-desc" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -371,7 +368,7 @@ export default function EmailScannerTab({ theme, mode, backendUrl, googleUser, a
                 <span className={`status-badge ${manualResult.risk_level}`}>
                   {manualResult.risk_level === 'danger' ? 'Phishing Threat' : manualResult.risk_level === 'suspicious' ? 'Suspicious Content' : manualResult.risk_level === 'safe' ? 'No clear indicators' : 'No score'}
                 </span>
-                <span className="score-pill">{scoreLabel(manualResult)}</span>
+                <span className="score-pill">{formatRiskIndex(manualResult.risk_score)}</span>
               </div>
               <h4 className="status-title">{manualResult.assessment || 'Email assessment'}</h4>
               <p className="status-desc">

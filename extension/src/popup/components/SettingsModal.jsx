@@ -19,6 +19,7 @@ export default function SettingsModal({
   backendOnline, checkBackendHealth,
   // Google OAuth props (Auth0 completely removed)
   googleUser,
+  gmailConfigured,
   authLoading,
   onSignIn,
   onSignOut,
@@ -42,7 +43,9 @@ export default function SettingsModal({
       const res = await localApi(backendUrl, '/api/health');
       const latency = Math.round(performance.now() - start);
       if (res.ok) {
-        setPingResult({ success: true, latency });
+        const health = await res.json();
+        const missingModels = !health.models_loaded?.email_phishing || !health.models_loaded?.url_phishing;
+        setPingResult({ success: true, latency, historyUnavailable: health.db_status !== 'connected', missingModels });
         checkBackendHealth();
       } else {
         setPingResult({ success: false, error: `HTTP ${res.status}` });
@@ -137,13 +140,13 @@ export default function SettingsModal({
               /* Signed-out state */
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                  Connect your Google account to scan your Gmail inbox for phishing threats automatically.
+                  {gmailConfigured ? 'Connect your Google account to scan your Gmail inbox.' : 'Google sign-in requires a configured extension build. The Gmail overlay uses your existing Gmail tab.'}
                 </p>
                 <button
                   className="btn-primary"
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
                   onClick={onSignIn}
-                  disabled={authLoading}
+                  disabled={authLoading || !gmailConfigured}
                 >
                   {authLoading ? (
                     <>
@@ -311,7 +314,7 @@ export default function SettingsModal({
             {pingResult && (
               <div style={{ fontSize: '11px', padding: '6px 8px', borderRadius: '4px', background: pingResult.success ? 'var(--color-safe-bg)' : 'var(--color-danger-bg)', color: pingResult.success ? 'var(--color-safe)' : 'var(--color-danger)', border: `1px solid ${pingResult.success ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}` }}>
                 {pingResult.success
-                  ? `Connected (${pingResult.latency}ms) - SQLite & heuristic models active`
+                  ? `Connected (${pingResult.latency}ms) · History ${pingResult.historyUnavailable ? 'unavailable' : 'available'} · Models ${pingResult.missingModels ? 'limited' : 'loaded'}`
                   : `Offline - ${pingResult.error}`}
               </div>
             )}
